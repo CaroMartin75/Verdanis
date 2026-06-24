@@ -1,64 +1,64 @@
-import { useState, useEffect, useCallback } from “react”;
+import { useState, useEffect, useCallback } from "react";
 
 // ─────────────────────────────────────────────────────────────
 // GLOBAL SEED DATA — relational, plants are the single source of truth
 // ─────────────────────────────────────────────────────────────
 const SEED_PLANTS = [
 {
-id: “p1”, name: “Lavanda”, emoji: “💜”, family: “Lamiaceae”,
-description: “Arbusto aromático mediterráneo. Ideal para bordes y atraer polinizadores.”,
+id: "p1", name: "Lavanda", emoji: "💜", family: "Lamiaceae",
+description: "Arbusto aromático mediterráneo. Ideal para bordes y atraer polinizadores.",
 heightCm: [60, 90], diameterCm: [60, 80],
-floweringSeason: [“Primavera”, “Verano”], flowerColor: “#b39ddb”,
-lifecycle: “perenne”, role: [“estructura”, “floración”, “aromática”],
-offseason: “Mantiene follaje gris plateado en invierno. Pierde vigor pero no muere.”,
-waterDays: 10, sunlight: “pleno sol”, zone: [“templada”, “mediterránea”],
-tags: [“sequía”, “polinizadores”, “perfume”],
+floweringSeason: ["Primavera", "Verano"], flowerColor: "#b39ddb",
+lifecycle: "perenne", role: ["estructura", "floración", "aromática"],
+offseason: "Mantiene follaje gris plateado en invierno. Pierde vigor pero no muere.",
+waterDays: 10, sunlight: "pleno sol", zone: ["templada", "mediterránea"],
+tags: ["sequía", "polinizadores", "perfume"],
 communityNotes: [
-{ user: “MartaB”, date: “2024-08”, text: “Podé en agosto post-floración y brotó increíble en primavera.” },
-{ user: “GardensBA”, date: “2024-03”, text: “En Buenos Aires conviene protegerla de heladas fuertes con mulch.” }
+{ user: "MartaB", date: "2024-08", text: "Podé en agosto post-floración y brotó increíble en primavera." },
+{ user: "GardensBA", date: "2024-03", text: "En Buenos Aires conviene protegerla de heladas fuertes con mulch." }
 ],
 plantOfDay: false,
 images: []
 },
 {
-id: “p2”, name: “Tomate Cherry”, emoji: “🍅”, family: “Solanaceae”,
-description: “Variedad pequeña y productiva. Ideal para macetas y huerta urbana.”,
+id: "p2", name: "Tomate Cherry", emoji: "🍅", family: "Solanaceae",
+description: "Variedad pequeña y productiva. Ideal para macetas y huerta urbana.",
 heightCm: [100, 180], diameterCm: [40, 60],
-floweringSeason: [“Verano”], flowerColor: “#fff176”,
-lifecycle: “anual”, role: [“producción”, “floración”],
-offseason: “Planta anual — muere con el frío. Recolectar semillas para próxima temporada.”,
-waterDays: 2, sunlight: “pleno sol”, zone: [“templada”, “subtropical”],
-tags: [“comestible”, “huerta”, “maceta”],
+floweringSeason: ["Verano"], flowerColor: "#fff176",
+lifecycle: "anual", role: ["producción", "floración"],
+offseason: "Planta anual — muere con el frío. Recolectar semillas para próxima temporada.",
+waterDays: 2, sunlight: "pleno sol", zone: ["templada", "subtropical"],
+tags: ["comestible", "huerta", "maceta"],
 communityNotes: [
-{ user: “HuertoFeliz”, date: “2024-12”, text: “Siembro en octubre en Buenos Aires. Primera cosecha en enero.” }
+{ user: "HuertoFeliz", date: "2024-12", text: "Siembro en octubre en Buenos Aires. Primera cosecha en enero." }
 ],
 plantOfDay: true,
 images: []
 },
 {
-id: “p3”, name: “Jacarandá”, emoji: “🌳”, family: “Bignoniaceae”,
-description: “Árbol ornamental de floración espectacular, violeta intenso. Caducifolio.”,
+id: "p3", name: "Jacarandá", emoji: "🌳", family: "Bignoniaceae",
+description: "Árbol ornamental de floración espectacular, violeta intenso. Caducifolio.",
 heightCm: [600, 1500], diameterCm: [400, 800],
-floweringSeason: [“Primavera”], flowerColor: “#7c4dff”,
-lifecycle: “perenne”, role: [“estructura”, “sombra”, “floración”],
-offseason: “Pierde hojas en invierno. La copa desnuda muestra su estructura escultural.”,
-waterDays: 14, sunlight: “pleno sol”, zone: [“templada”, “subtropical”],
-tags: [“árbol”, “sombra”, “icónico”],
+floweringSeason: ["Primavera"], flowerColor: "#7c4dff",
+lifecycle: "perenne", role: ["estructura", "sombra", "floración"],
+offseason: "Pierde hojas en invierno. La copa desnuda muestra su estructura escultural.",
+waterDays: 14, sunlight: "pleno sol", zone: ["templada", "subtropical"],
+tags: ["árbol", "sombra", "icónico"],
 communityNotes: [],
 plantOfDay: false,
 images: []
 },
 {
-id: “p4”, name: “Albahaca”, emoji: “🌿”, family: “Lamiaceae”,
-description: “Hierba aromática esencial. Compañera perfecta del tomate en la huerta.”,
+id: "p4", name: "Albahaca", emoji: "🌿", family: "Lamiaceae",
+description: "Hierba aromática esencial. Compañera perfecta del tomate en la huerta.",
 heightCm: [30, 60], diameterCm: [20, 40],
-floweringSeason: [“Verano”], flowerColor: “#ffffff”,
-lifecycle: “anual”, role: [“producción”, “aromática”],
-offseason: “Muere con el frío. Dejar florecer al final para recolectar semillas.”,
-waterDays: 2, sunlight: “semisombra”, zone: [“templada”, “subtropical”],
-tags: [“comestible”, “aromática”, “compañera”],
+floweringSeason: ["Verano"], flowerColor: "#ffffff",
+lifecycle: "anual", role: ["producción", "aromática"],
+offseason: "Muere con el frío. Dejar florecer al final para recolectar semillas.",
+waterDays: 2, sunlight: "semisombra", zone: ["templada", "subtropical"],
+tags: ["comestible", "aromática", "compañera"],
 communityNotes: [
-{ user: “MartaB”, date: “2024-01”, text: “Pinchar las flores para que produzca más hojas durante más tiempo.” }
+{ user: "MartaB", date: "2024-01", text: "Pinchar las flores para que produzca más hojas durante más tiempo." }
 ],
 plantOfDay: false,
 images: []
@@ -67,40 +67,40 @@ images: []
 
 const SEED_GARDENS = [
 {
-id: “g1”, name: “Mi jardín principal”, location: “Buenos Aires”, zone: “templada”,
+id: "g1", name: "Mi jardín principal", location: "Buenos Aires", zone: "templada",
 beds: [
-{ id: “b1”, name: “Cantero frontal”, shape: “rect”, w: 4, h: 1.5, plantIds: [“p1”, “p3”] },
-{ id: “b2”, name: “Huerta”, shape: “rect”, w: 3, h: 2, plantIds: [“p2”, “p4”] },
+{ id: "b1", name: "Cantero frontal", shape: "rect", w: 4, h: 1.5, plantIds: ["p1", "p3"] },
+{ id: "b2", name: "Huerta", shape: "rect", w: 3, h: 2, plantIds: ["p2", "p4"] },
 ]
 }
 ];
 
 const SEED_TASKS = [
-{ id: “t1”, plantId: “p1”, gardenId: “g1”, bedId: “b1”, type: “poda”, date: “2024-08-15”, note: “Poda post-floración. Quedó muy compacta.”, learnedPattern: true },
-{ id: “t2”, plantId: “p2”, gardenId: “g1”, bedId: “b2”, type: “siembra”, date: “2024-10-10”, note: “Siembra en almácigo. Germinó en 8 días.”, learnedPattern: true },
-{ id: “t3”, plantId: “p4”, gardenId: “g1”, bedId: “b2”, type: “poda”, date: “2025-01-20”, note: “Pinché flores para prolongar cosecha.”, learnedPattern: false },
+{ id: "t1", plantId: "p1", gardenId: "g1", bedId: "b1", type: "poda", date: "2024-08-15", note: "Poda post-floración. Quedó muy compacta.", learnedPattern: true },
+{ id: "t2", plantId: "p2", gardenId: "g1", bedId: "b2", type: "siembra", date: "2024-10-10", note: "Siembra en almácigo. Germinó en 8 días.", learnedPattern: true },
+{ id: "t3", plantId: "p4", gardenId: "g1", bedId: "b2", type: "poda", date: "2025-01-20", note: "Pinché flores para prolongar cosecha.", learnedPattern: false },
 ];
 
 const SEED_RECORDS = [
-{ id: “r1”, plantId: “p1”, gardenId: “g1”, date: “2025-04-01”, text: “La lavanda comenzó a brotar con fuerza luego de la poda de agosto.”, evolution: “positiva” },
-{ id: “r2”, plantId: “p2”, gardenId: “g1”, date: “2025-01-15”, text: “Primera cosecha de cherry, abundante. Unas 300g esta semana.”, evolution: “positiva” },
+{ id: "r1", plantId: "p1", gardenId: "g1", date: "2025-04-01", text: "La lavanda comenzó a brotar con fuerza luego de la poda de agosto.", evolution: "positiva" },
+{ id: "r2", plantId: "p2", gardenId: "g1", date: "2025-01-15", text: "Primera cosecha de cherry, abundante. Unas 300g esta semana.", evolution: "positiva" },
 ];
 
 const SEED_PESTS = [
-{ id: “pe1”, plantId: “p2”, name: “Mosca blanca”, date: “2024-12-20”, treatment: “Jabón potásico + agua. Aplicar cada 5 días x 2 semanas.”, resolved: true },
+{ id: "pe1", plantId: "p2", name: "Mosca blanca", date: "2024-12-20", treatment: "Jabón potásico + agua. Aplicar cada 5 días x 2 semanas.", resolved: true },
 ];
 
-const MONTHS = [“Enero”,“Febrero”,“Marzo”,“Abril”,“Mayo”,“Junio”,“Julio”,“Agosto”,“Septiembre”,“Octubre”,“Noviembre”,“Diciembre”];
-const SEASONS = { “Dic-Feb”: “Verano”, “Mar-May”: “Otoño”, “Jun-Ago”: “Invierno”, “Sep-Nov”: “Primavera” };
-const TASK_TYPES = [“riego”, “poda”, “fertilización”, “siembra”, “trasplante”, “cosecha”, “tratamiento”, “observación”, “otro”];
-const LIFECYCLE_LABEL = { anual: “🌱 Anual”, bianual: “🌿 Bianual”, perenne: “🌳 Perenne” };
+const MONTHS = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+const SEASONS = { "Dic-Feb": "Verano", "Mar-May": "Otoño", "Jun-Ago": "Invierno", "Sep-Nov": "Primavera" };
+const TASK_TYPES = ["riego", "poda", "fertilización", "siembra", "trasplante", "cosecha", "tratamiento", "observación", "otro"];
+const LIFECYCLE_LABEL = { anual: "🌱 Anual", bianual: "🌿 Bianual", perenne: "🌳 Perenne" };
 
 function getCurrentSeason() {
 const m = new Date().getMonth();
-if (m >= 11 || m <= 1) return “Verano”;
-if (m >= 2 && m <= 4) return “Otoño”;
-if (m >= 5 && m <= 7) return “Invierno”;
-return “Primavera”;
+if (m >= 11 || m <= 1) return "Verano";
+if (m >= 2 && m <= 4) return "Otoño";
+if (m >= 5 && m <= 7) return "Invierno";
+return "Primavera";
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -113,11 +113,11 @@ const [tasks, setTasks] = useState(SEED_TASKS);
 const [records, setRecords] = useState(SEED_RECORDS);
 const [pests, setPests] = useState(SEED_PESTS);
 
-const [activeSection, setActiveSection] = useState(“inicio”);
-const [activeGarden, setActiveGarden] = useState(“g1”);
+const [activeSection, setActiveSection] = useState("inicio");
+const [activeGarden, setActiveGarden] = useState("g1");
 const [selectedPlantId, setSelectedPlantId] = useState(null);
 const [isPublicView, setIsPublicView] = useState(false);
-const [searchQ, setSearchQ] = useState(””);
+const [searchQ, setSearchQ] = useState("");
 
 const garden = gardens.find(g => g.id === activeGarden);
 
@@ -127,40 +127,40 @@ const plant = plants.find(p => p.id === plantId);
 const plantTasks = tasks.filter(t => t.plantId === plantId);
 const plantRecords = records.filter(r => r.plantId === plantId);
 const plantPests = pests.filter(p => p.plantId === plantId);
-const inBeds = gardens.flatMap(g => g.beds.filter(b => b.plantIds.includes(plantId)).map(b => ({ …b, gardenName: g.name })));
+const inBeds = gardens.flatMap(g => g.beds.filter(b => b.plantIds.includes(plantId)).map(b => ({ ...b, gardenName: g.name })));
 return { plant, tasks: plantTasks, records: plantRecords, pests: plantPests, inBeds };
 }, [plants, tasks, records, pests, gardens]);
 
 const updatePlantNote = (plantId, note) => {
 setPlants(prev => prev.map(p => p.id === plantId
-? { …p, communityNotes: […p.communityNotes, { user: “Yo”, date: new Date().toISOString().slice(0,7), text: note }] }
+? { ...p, communityNotes: [...p.communityNotes, { user: "Yo", date: new Date().toISOString().slice(0,7), text: note }] }
 : p
 ));
 };
 
 const addTask = (task) => {
-const newTask = { …task, id: “t” + Date.now(), learnedPattern: true };
-setTasks(prev => […prev, newTask]);
+const newTask = { ...task, id: "t" + Date.now(), learnedPattern: true };
+setTasks(prev => [...prev, newTask]);
 // If task has a note, also add as record
 if (task.note) {
-setRecords(prev => […prev, { id: “r” + Date.now(), plantId: task.plantId, gardenId: task.gardenId, date: task.date, text: `[${task.type.toUpperCase()}] ${task.note}`, evolution: “neutral” }]);
+setRecords(prev => [...prev, { id: "r" + Date.now(), plantId: task.plantId, gardenId: task.gardenId, date: task.date, text: `[${task.type.toUpperCase()}] ${task.note}`, evolution: "neutral" }]);
 }
 };
 
 const plantOfDay = plants.find(p => p.plantOfDay) || plants[0];
 
 const navItems = [
-{ id: “inicio”, label: “Inicio”, icon: “🏡” },
-{ id: “plantas”, label: “Plantas”, icon: “🌿” },
-{ id: “tareas”, label: “Tareas”, icon: “✅” },
-{ id: “calendario”, label: “Calendario”, icon: “📅” },
-{ id: “diseno”, label: “Diseño”, icon: “📐” },
-{ id: “plagas”, label: “Plagas”, icon: “🐛” },
-{ id: “comunidad”, label: “Comunidad”, icon: “🌍” },
+{ id: "inicio", label: "Inicio", icon: "🏡" },
+{ id: "plantas", label: "Plantas", icon: "🌿" },
+{ id: "tareas", label: "Tareas", icon: "✅" },
+{ id: "calendario", label: "Calendario", icon: "📅" },
+{ id: "diseno", label: "Diseño", icon: "📐" },
+{ id: "plagas", label: "Plagas", icon: "🐛" },
+{ id: "comunidad", label: "Comunidad", icon: "🌍" },
 ];
 
 return (
-<div style={{ minHeight: “100vh”, background: “#f5f0e8”, fontFamily: “‘Palatino Linotype’, ‘Book Antiqua’, Palatino, serif”, color: “#2c2416” }}>
+<div style={{ minHeight: "100vh", background: "#f5f0e8", fontFamily: "'Palatino Linotype', 'Book Antiqua', Palatino, serif", color: "#2c2416" }}>
 <style>{`
 * { box-sizing: border-box; }
 ::-webkit-scrollbar { width: 4px; }
@@ -183,7 +183,6 @@ label { display: block; font-size: 11px; letter-spacing: 1px; text-transform: up
 input[type=text], input[type=date], select, textarea { width: 100%; background: #faf8f3; border: 1px solid #ddd4c0; border-radius: 8px; padding: 9px 12px; font-size: 14px; color: #2c2416; outline: none; }
 input[type=text]:focus, input[type=date]:focus, select:focus, textarea:focus { border-color: #8ab860; }
 
-```
     /* ── RESPONSIVE LAYOUT ── */
     .app-shell { display: flex; flex-direction: column; min-height: 100vh; }
 
@@ -293,8 +292,6 @@ input[type=text]:focus, input[type=date]:focus, select:focus, textarea:focus { b
     </nav>
   </div>
 </div>
-```
-
 );
 }
 
@@ -311,11 +308,10 @@ return (
 <div>
 <div style={{ marginBottom: 28 }}>
 <div className="section-title">Panel principal</div>
-<h2 style={{ margin: 0, fontSize: 28, fontWeight: 400 }}>{garden?.name} <span style={{ fontSize: 16, color: “#8a7a5a” }}>— {season}</span></h2>
-<div style={{ color: “#8a7a5a”, fontSize: 14, marginTop: 4 }}>{garden?.location} · Zona {garden?.zone}</div>
+<h2 style={{ margin: 0, fontSize: 28, fontWeight: 400 }}>{garden?.name} <span style={{ fontSize: 16, color: "#8a7a5a" }}>— {season}</span></h2>
+<div style={{ color: "#8a7a5a", fontSize: 14, marginTop: 4 }}>{garden?.location} · Zona {garden?.zone}</div>
 </div>
 
-```
   <div className="grid-3" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 24 }}>
     <div className="card" style={{ borderLeft: "4px solid #4a7a2a" }}>
       <div style={{ fontSize: 28 }}>🌿</div>
@@ -386,8 +382,6 @@ return (
     </div>
   </div>
 </div>
-```
-
 );
 }
 
@@ -395,10 +389,10 @@ return (
 // PLANT SHEET — full relational view of a single plant
 // ─────────────────────────────────────────────────────────────
 function PlantSheet({ plantId, getPlantContext, onBack, updatePlantNote, addTask, gardenId, plants, setPlants }) {
-const [newNote, setNewNote] = useState(””);
-const [newTaskType, setNewTaskType] = useState(“poda”);
+const [newNote, setNewNote] = useState("");
+const [newTaskType, setNewTaskType] = useState("poda");
 const [newTaskDate, setNewTaskDate] = useState(new Date().toISOString().slice(0,10));
-const [newTaskNote, setNewTaskNote] = useState(””);
+const [newTaskNote, setNewTaskNote] = useState("");
 const [editMode, setEditMode] = useState(false);
 const [editData, setEditData] = useState({});
 
@@ -414,21 +408,20 @@ if (!plant) return null;
 const handleAddNote = () => {
 if (!newNote.trim()) return;
 updatePlantNote(plantId, newNote);
-setNewNote(””);
+setNewNote("");
 };
 
 const handleAddTask = () => {
-addTask({ plantId, gardenId, bedId: inBeds[0]?.id || “”, type: newTaskType, date: newTaskDate, note: newTaskNote });
-setNewTaskNote(””);
+addTask({ plantId, gardenId, bedId: inBeds[0]?.id || "", type: newTaskType, date: newTaskDate, note: newTaskNote });
+setNewTaskNote("");
 };
 
-const taskTypes_es = { poda: “✂️”, riego: “💧”, fertilización: “🌾”, siembra: “🌱”, trasplante: “🪴”, cosecha: “🧺”, tratamiento: “💊”, observación: “👁”, otro: “📝” };
+const taskTypes_es = { poda: "✂️", riego: "💧", fertilización: "🌾", siembra: "🌱", trasplante: "🪴", cosecha: "🧺", tratamiento: "💊", observación: "👁", otro: "📝" };
 
 return (
 <div className="fade-in">
-<button onClick={onBack} className=“btn-secondary” style={{ marginBottom: 20 }}>← Volver</button>
+<button onClick={onBack} className="btn-secondary" style={{ marginBottom: 20 }}>← Volver</button>
 
-```
   {/* Header */}
   <div style={{ display: "flex", alignItems: "flex-start", gap: 20, marginBottom: 28 }}>
     <div style={{ fontSize: 64 }}>{plant.emoji}</div>
@@ -572,17 +565,15 @@ return (
     </div>
   </div>
 </div>
-```
-
 );
 }
 
 function InfoRow({ icon, label, value }) {
 return (
-<div style={{ padding: “6px 0”, borderBottom: “1px solid #f5f0e8” }}>
+<div style={{ padding: "6px 0", borderBottom: "1px solid #f5f0e8" }}>
 <span style={{ fontSize: 14 }}>{icon}</span>
-<span style={{ fontSize: 11, color: “#8a7a5a”, marginLeft: 4 }}>{label}: </span>
-<span style={{ fontSize: 13, color: “#4a3a2a” }}>{value}</span>
+<span style={{ fontSize: 11, color: "#8a7a5a", marginLeft: 4 }}>{label}: </span>
+<span style={{ fontSize: 13, color: "#4a3a2a" }}>{value}</span>
 </div>
 );
 }
@@ -592,35 +583,34 @@ return (
 // ─────────────────────────────────────────────────────────────
 function PlantsSection({ plants, setPlants, setSelectedPlantId, garden, searchQ, setSearchQ, getPlantContext }) {
 const [showAdd, setShowAdd] = useState(false);
-const [newPlant, setNewPlant] = useState({ name: “”, emoji: “🌿”, family: “”, description: “”, heightCm: [30, 60], diameterCm: [20, 40], floweringSeason: [], flowerColor: “#ffffff”, lifecycle: “perenne”, role: [], offseason: “”, waterDays: 3, sunlight: “pleno sol”, zone: [“templada”], tags: [], communityNotes: [], plantOfDay: false, images: [] });
-const [filterLC, setFilterLC] = useState(“todos”);
+const [newPlant, setNewPlant] = useState({ name: "", emoji: "🌿", family: "", description: "", heightCm: [30, 60], diameterCm: [20, 40], floweringSeason: [], flowerColor: "#ffffff", lifecycle: "perenne", role: [], offseason: "", waterDays: 3, sunlight: "pleno sol", zone: ["templada"], tags: [], communityNotes: [], plantOfDay: false, images: [] });
+const [filterLC, setFilterLC] = useState("todos");
 
 const filtered = plants.filter(p => {
 const q = searchQ.toLowerCase();
-const matchQ = !q || p.name.toLowerCase().includes(q) || p.tags.join(” “).includes(q) || p.role.join(” “).includes(q);
-const matchLC = filterLC === “todos” || p.lifecycle === filterLC;
+const matchQ = !q || p.name.toLowerCase().includes(q) || p.tags.join(" ").includes(q) || p.role.join(" ").includes(q);
+const matchLC = filterLC === "todos" || p.lifecycle === filterLC;
 return matchQ && matchLC;
 });
 
 const addPlant = () => {
 if (!newPlant.name.trim()) return;
-setPlants(prev => […prev, { …newPlant, id: “p” + Date.now() }]);
+setPlants(prev => [...prev, { ...newPlant, id: "p" + Date.now() }]);
 setShowAdd(false);
 };
 
 return (
 <div>
-<div style={{ display: “flex”, alignItems: “center”, justifyContent: “space-between”, marginBottom: 20 }}>
+<div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
 <div>
 <div className="section-title">Base de plantas</div>
 <h2 style={{ margin: 0, fontSize: 24, fontWeight: 400 }}>Mis plantas ({plants.length})</h2>
 </div>
-<button className=“btn-primary” onClick={() => setShowAdd(v => !v)}>＋ Agregar planta</button>
+<button className="btn-primary" onClick={() => setShowAdd(v => !v)}>＋ Agregar planta</button>
 </div>
 
-```
   <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
-    <input type="text" value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Buscar por nombre, etiqueta, rol…" style={{ flex: 1, minWidth: 200 }} />
+    <input type="text" value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Buscar por nombre, etiqueta, rol..." style={{ flex: 1, minWidth: 200 }} />
     {["todos", "anual", "bianual", "perenne"].map(lc => (
       <button key={lc} onClick={() => setFilterLC(lc)} className="btn-secondary"
         style={{ background: filterLC === lc ? "#4a7a2a" : undefined, color: filterLC === lc ? "#fff" : undefined, borderColor: filterLC === lc ? "#4a7a2a" : undefined }}>
@@ -673,7 +663,7 @@ return (
           </div>
           <div style={{ fontSize: 17, fontWeight: 600, marginTop: 8 }}>{plant.name}</div>
           <div style={{ fontSize: 12, color: "#8a7a5a", fontStyle: "italic" }}>{plant.family}</div>
-          <div style={{ fontSize: 13, color: "#6a5a3a", marginTop: 6, lineHeight: 1.5 }}>{plant.description.slice(0, 80)}…</div>
+          <div style={{ fontSize: 13, color: "#6a5a3a", marginTop: 6, lineHeight: 1.5 }}>{plant.description.slice(0, 80)}...</div>
           <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 3 }}>
             {plant.role.slice(0,2).map(r => <span key={r} className="tag">{r}</span>)}
           </div>
@@ -686,8 +676,6 @@ return (
     })}
   </div>
 </div>
-```
-
 );
 }
 
@@ -695,14 +683,14 @@ return (
 // TASKS SECTION
 // ─────────────────────────────────────────────────────────────
 function TasksSection({ tasks, plants, gardens, garden, addTask, setSelectedPlantId }) {
-const [filterType, setFilterType] = useState(“todos”);
-const [newT, setNewT] = useState({ plantId: plants[0]?.id || “”, gardenId: garden?.id || “”, bedId: “”, type: “poda”, date: new Date().toISOString().slice(0,10), note: “” });
+const [filterType, setFilterType] = useState("todos");
+const [newT, setNewT] = useState({ plantId: plants[0]?.id || "", gardenId: garden?.id || "", bedId: "", type: "poda", date: new Date().toISOString().slice(0,10), note: "" });
 const [showAdd, setShowAdd] = useState(false);
 
-const taskTypes_es = { poda: “✂️”, riego: “💧”, fertilización: “🌾”, siembra: “🌱”, trasplante: “🪴”, cosecha: “🧺”, tratamiento: “💊”, observación: “👁”, otro: “📝” };
+const taskTypes_es = { poda: "✂️", riego: "💧", fertilización: "🌾", siembra: "🌱", trasplante: "🪴", cosecha: "🧺", tratamiento: "💊", observación: "👁", otro: "📝" };
 
 const gardenTasks = tasks.filter(t => t.gardenId === garden?.id);
-const filtered = filterType === “todos” ? gardenTasks : gardenTasks.filter(t => t.type === filterType);
+const filtered = filterType === "todos" ? gardenTasks : gardenTasks.filter(t => t.type === filterType);
 
 // Group by month
 const grouped = {};
@@ -715,16 +703,15 @@ const months = Object.keys(grouped).sort().reverse();
 
 return (
 <div>
-<div style={{ display: “flex”, alignItems: “center”, justifyContent: “space-between”, marginBottom: 20 }}>
+<div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
 <div><div className="section-title">Gestión de tareas</div><h2 style={{ margin: 0, fontSize: 24, fontWeight: 400 }}>Tareas — {garden?.name}</h2></div>
-<button className=“btn-primary” onClick={() => setShowAdd(v => !v)}>＋ Nueva tarea</button>
+<button className="btn-primary" onClick={() => setShowAdd(v => !v)}>＋ Nueva tarea</button>
 </div>
 
-```
   {showAdd && (
     <div className="card" style={{ marginBottom: 20 }}>
       <div className="section-title">Registrar tarea</div>
-      <div className="grid-4" className="grid-4" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12 }}>
+      <div className="grid-4" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12 }}>
         <div><label>Planta</label>
           <select value={newT.plantId} onChange={e => setNewT(t => ({ ...t, plantId: e.target.value }))}>
             {plants.map(p => <option key={p.id} value={p.id}>{p.emoji} {p.name}</option>)}
@@ -736,7 +723,7 @@ return (
           </select>
         </div>
         <div><label>Fecha</label><input type="date" value={newT.date} onChange={e => setNewT(t => ({ ...t, date: e.target.value }))} /></div>
-        <div style={{ gridColumn: "1 / -1" }}><label>Nota</label><input type="text" value={newT.note} onChange={e => setNewT(t => ({ ...t, note: e.target.value }))} placeholder="Observación, resultado, método usado…" /></div>
+        <div style={{ gridColumn: "1 / -1" }}><label>Nota</label><input type="text" value={newT.note} onChange={e => setNewT(t => ({ ...t, note: e.target.value }))} placeholder="Observación, resultado, método usado..." /></div>
       </div>
       <div style={{ marginTop: 14, display: "flex", gap: 10 }}>
         <button className="btn-primary" onClick={() => { addTask({ ...newT, gardenId: garden?.id }); setShowAdd(false); }}>Guardar</button>
@@ -777,8 +764,6 @@ return (
     </div>
   ))}
 </div>
-```
-
 );
 }
 
@@ -804,29 +789,28 @@ byPlant[t.plantId].push(t);
 
 // Guru calendar data (simulated community recommendations)
 const guruCalendar = {
-0: [{ plant: “Tomate Cherry”, action: “Siembra en almácigo en zonas cálidas”, source: “Calendario HBA” }],
-1: [{ plant: “Albahaca”, action: “Trasplantar a exterior con calor estable”, source: “GardenBA” }],
-2: [{ plant: “Lavanda”, action: “Poda leve post-verano”, source: “Calendario HBA” }],
-3: [{ plant: “Tomate Cherry”, action: “Última cosecha antes del frío”, source: “GardenBA” }],
-8: [{ plant: “Tomate Cherry”, action: “Preparar almácigos para siembra primaveral”, source: “Calendario HBA” }, { plant: “Jacarandá”, action: “Comenzará a florecer pronto. No podar.”, source: “GardenBA” }],
-9: [{ plant: “Lavanda”, action: “Plantar nuevos ejemplares”, source: “Calendario HBA” }],
-10: [{ plant: “Tomate Cherry”, action: “Siembra directa en climas cálidos”, source: “GardenBA” }],
-11: [{ plant: “Albahaca”, action: “Siembra en maceta en interior”, source: “Calendario HBA” }],
+0: [{ plant: "Tomate Cherry", action: "Siembra en almácigo en zonas cálidas", source: "Calendario HBA" }],
+1: [{ plant: "Albahaca", action: "Trasplantar a exterior con calor estable", source: "GardenBA" }],
+2: [{ plant: "Lavanda", action: "Poda leve post-verano", source: "Calendario HBA" }],
+3: [{ plant: "Tomate Cherry", action: "Última cosecha antes del frío", source: "GardenBA" }],
+8: [{ plant: "Tomate Cherry", action: "Preparar almácigos para siembra primaveral", source: "Calendario HBA" }, { plant: "Jacarandá", action: "Comenzará a florecer pronto. No podar.", source: "GardenBA" }],
+9: [{ plant: "Lavanda", action: "Plantar nuevos ejemplares", source: "Calendario HBA" }],
+10: [{ plant: "Tomate Cherry", action: "Siembra directa en climas cálidos", source: "GardenBA" }],
+11: [{ plant: "Albahaca", action: "Siembra en maceta en interior", source: "Calendario HBA" }],
 };
 
 const guruThisMonth = guruCalendar[viewMonth] || [];
 
-const taskTypes_es = { poda: “✂️”, riego: “💧”, fertilización: “🌾”, siembra: “🌱”, trasplante: “🪴”, cosecha: “🧺”, tratamiento: “💊”, observación: “👁”, otro: “📝” };
+const taskTypes_es = { poda: "✂️", riego: "💧", fertilización: "🌾", siembra: "🌱", trasplante: "🪴", cosecha: "🧺", tratamiento: "💊", observación: "👁", otro: "📝" };
 
 return (
 <div>
 <div style={{ marginBottom: 20 }}>
 <div className="section-title">Calendario perpetuo</div>
 <h2 style={{ margin: 0, fontSize: 24, fontWeight: 400 }}>Actividad por mes</h2>
-<p style={{ margin: “4px 0 0”, color: “#8a7a5a”, fontSize: 13 }}>Patrones aprendidos de tus acciones + recomendaciones de expertos</p>
+<p style={{ margin: "4px 0 0", color: "#8a7a5a", fontSize: 13 }}>Patrones aprendidos de tus acciones + recomendaciones de expertos</p>
 </div>
 
-```
   {/* Month selector */}
   <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 20 }}>
     {MONTHS.map((m, i) => (
@@ -889,7 +873,7 @@ return (
   {/* Season view */}
   <div className="card" style={{ marginTop: 20 }}>
     <div className="section-title">Vista por estación</div>
-    <div className="grid-4" className="grid-4" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12 }}>
+    <div className="grid-4" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12 }}>
       {[["🌸 Primavera", [8,9,10]], ["☀️ Verano", [11,0,1]], ["🍂 Otoño", [2,3,4]], ["❄️ Invierno", [5,6,7]]].map(([label, months]) => {
         const seasonTasks = tasks.filter(t => months.includes(parseInt(t.date.slice(5,7)) - 1) && t.gardenId === garden?.id);
         const uniquePlants = [...new Set(seasonTasks.map(t => t.plantId))];
@@ -909,8 +893,6 @@ return (
     </div>
   </div>
 </div>
-```
-
 );
 }
 
@@ -920,7 +902,7 @@ return (
 function DesignSection({ garden, gardens, setGardens, plants, setSelectedPlantId, activeGarden }) {
 const [selectedBed, setSelectedBed] = useState(null);
 const [showAddBed, setShowAddBed] = useState(false);
-const [newBed, setNewBed] = useState({ name: “”, w: 3, h: 2 });
+const [newBed, setNewBed] = useState({ name: "", w: 3, h: 2 });
 
 const updateGarden = (updater) => {
 setGardens(prev => prev.map(g => g.id === activeGarden ? updater(g) : g));
@@ -928,34 +910,33 @@ setGardens(prev => prev.map(g => g.id === activeGarden ? updater(g) : g));
 
 const addBed = () => {
 if (!newBed.name.trim()) return;
-updateGarden(g => ({ …g, beds: […g.beds, { id: “b” + Date.now(), name: newBed.name, shape: “rect”, w: parseFloat(newBed.w), h: parseFloat(newBed.h), plantIds: [] }] }));
+updateGarden(g => ({ ...g, beds: [...g.beds, { id: "b" + Date.now(), name: newBed.name, shape: "rect", w: parseFloat(newBed.w), h: parseFloat(newBed.h), plantIds: [] }] }));
 setShowAddBed(false);
-setNewBed({ name: “”, w: 3, h: 2 });
+setNewBed({ name: "", w: 3, h: 2 });
 };
 
 const addPlantToBed = (bedId, plantId) => {
-updateGarden(g => ({ …g, beds: g.beds.map(b => b.id === bedId && !b.plantIds.includes(plantId) ? { …b, plantIds: […b.plantIds, plantId] } : b) }));
+updateGarden(g => ({ ...g, beds: g.beds.map(b => b.id === bedId && !b.plantIds.includes(plantId) ? { ...b, plantIds: [...b.plantIds, plantId] } : b) }));
 };
 
 const removePlantFromBed = (bedId, plantId) => {
-updateGarden(g => ({ …g, beds: g.beds.map(b => b.id === bedId ? { …b, plantIds: b.plantIds.filter(id => id !== plantId) } : b) }));
+updateGarden(g => ({ ...g, beds: g.beds.map(b => b.id === bedId ? { ...b, plantIds: b.plantIds.filter(id => id !== plantId) } : b) }));
 };
 
 const bed = garden?.beds?.find(b => b.id === selectedBed);
 
 return (
 <div>
-<div style={{ display: “flex”, justifyContent: “space-between”, alignItems: “center”, marginBottom: 20 }}>
+<div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
 <div><div className="section-title">Diseño del jardín</div><h2 style={{ margin: 0, fontSize: 24, fontWeight: 400 }}>{garden?.name}</h2></div>
-<button className=“btn-primary” onClick={() => setShowAddBed(v => !v)}>＋ Nuevo cantero</button>
+<button className="btn-primary" onClick={() => setShowAddBed(v => !v)}>＋ Nuevo cantero</button>
 </div>
 
-```
   {showAddBed && (
     <div className="card" style={{ marginBottom: 20 }}>
       <div className="section-title">Nuevo cantero / espacio</div>
       <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 12 }}>
-        <div><label>Nombre</label><input type="text" value={newBed.name} onChange={e => setNewBed(b => ({ ...b, name: e.target.value }))} placeholder="Cantero frontal, huerta…" /></div>
+        <div><label>Nombre</label><input type="text" value={newBed.name} onChange={e => setNewBed(b => ({ ...b, name: e.target.value }))} placeholder="Cantero frontal, huerta..." /></div>
         <div><label>Ancho (m)</label><input type="text" value={newBed.w} onChange={e => setNewBed(b => ({ ...b, w: e.target.value }))} /></div>
         <div><label>Alto (m)</label><input type="text" value={newBed.h} onChange={e => setNewBed(b => ({ ...b, h: e.target.value }))} /></div>
       </div>
@@ -1026,8 +1007,6 @@ return (
     </div>
   )}
 </div>
-```
-
 );
 }
 
@@ -1036,25 +1015,24 @@ return (
 // ─────────────────────────────────────────────────────────────
 function PestsSection({ pests, setPests, plants, garden, setSelectedPlantId }) {
 const [showAdd, setShowAdd] = useState(false);
-const [newPest, setNewPest] = useState({ plantId: plants[0]?.id || “”, name: “”, date: new Date().toISOString().slice(0,10), treatment: “”, resolved: false });
+const [newPest, setNewPest] = useState({ plantId: plants[0]?.id || "", name: "", date: new Date().toISOString().slice(0,10), treatment: "", resolved: false });
 
 const addPest = () => {
 if (!newPest.name.trim()) return;
-setPests(prev => […prev, { …newPest, id: “pe” + Date.now() }]);
+setPests(prev => [...prev, { ...newPest, id: "pe" + Date.now() }]);
 setShowAdd(false);
 };
 
 const gardenPlantIds = garden?.beds?.flatMap(b => b.plantIds) || [];
-const gardenPests = pests.filter(p => gardenPlantIds.includes(p.plantId) || true); // show all for now
+const gardenPests = pests.filter(p => gardenPlantIds.includes(p.plantId) || true);
 
 return (
 <div>
-<div style={{ display: “flex”, justifyContent: “space-between”, alignItems: “center”, marginBottom: 20 }}>
+<div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
 <div><div className="section-title">Sanidad vegetal</div><h2 style={{ margin: 0, fontSize: 24, fontWeight: 400 }}>Plagas & tratamientos</h2></div>
-<button className=“btn-primary” onClick={() => setShowAdd(v => !v)}>＋ Registrar plaga</button>
+<button className="btn-primary" onClick={() => setShowAdd(v => !v)}>＋ Registrar plaga</button>
 </div>
 
-```
   {showAdd && (
     <div className="card" style={{ marginBottom: 20 }}>
       <div className="section-title">Nueva plaga / problema</div>
@@ -1064,9 +1042,9 @@ return (
             {plants.map(p => <option key={p.id} value={p.id}>{p.emoji} {p.name}</option>)}
           </select>
         </div>
-        <div><label>Plaga / problema</label><input type="text" value={newPest.name} onChange={e => setNewPest(p => ({ ...p, name: e.target.value }))} placeholder="Mosca blanca, pulgón…" /></div>
+        <div><label>Plaga / problema</label><input type="text" value={newPest.name} onChange={e => setNewPest(p => ({ ...p, name: e.target.value }))} placeholder="Mosca blanca, pulgón..." /></div>
         <div><label>Fecha detección</label><input type="date" value={newPest.date} onChange={e => setNewPest(p => ({ ...p, date: e.target.value }))} /></div>
-        <div style={{ gridColumn: "1 / -1" }}><label>Tratamiento aplicado</label><textarea value={newPest.treatment} rows={2} onChange={e => setNewPest(p => ({ ...p, treatment: e.target.value }))} placeholder="Producto, dosis, frecuencia…" /></div>
+        <div style={{ gridColumn: "1 / -1" }}><label>Tratamiento aplicado</label><textarea value={newPest.treatment} rows={2} onChange={e => setNewPest(p => ({ ...p, treatment: e.target.value }))} placeholder="Producto, dosis, frecuencia..." /></div>
       </div>
       <div style={{ marginTop: 12, display: "flex", gap: 10 }}>
         <button className="btn-primary" onClick={addPest}>Guardar</button>
@@ -1106,8 +1084,6 @@ return (
     {gardenPests.length === 0 && <div className="card" style={{ textAlign: "center", color: "#8a7a5a", padding: 40 }}>🌿 Sin plagas registradas. ¡Buen trabajo!</div>}
   </div>
 </div>
-```
-
 );
 }
 
@@ -1115,22 +1091,21 @@ return (
 // COMMUNITY SECTION
 // ─────────────────────────────────────────────────────────────
 function CommunitySection({ plants, updatePlantNote, setSelectedPlantId }) {
-const [search, setSearch] = useState(””);
-const allNotes = plants.flatMap(p => p.communityNotes.map(n => ({ …n, plantId: p.id, plantName: p.name, plantEmoji: p.emoji })));
-const filteredPlants = plants.filter(p => !search || p.name.toLowerCase().includes(search.toLowerCase()) || p.tags.join(” “).includes(search.toLowerCase()));
+const [search, setSearch] = useState("");
+const allNotes = plants.flatMap(p => p.communityNotes.map(n => ({ ...n, plantId: p.id, plantName: p.name, plantEmoji: p.emoji })));
+const filteredPlants = plants.filter(p => !search || p.name.toLowerCase().includes(search.toLowerCase()) || p.tags.join(" ").includes(search.toLowerCase()));
 
 return (
 <div>
 <div style={{ marginBottom: 20 }}>
 <div className="section-title">Espacio público</div>
 <h2 style={{ margin: 0, fontSize: 24, fontWeight: 400 }}>Comunidad</h2>
-<p style={{ margin: “4px 0 0”, color: “#8a7a5a”, fontSize: 13 }}>Conocimiento compartido sobre plantas — visible para todos los usuarios</p>
+<p style={{ margin: "4px 0 0", color: "#8a7a5a", fontSize: 13 }}>Conocimiento compartido sobre plantas — visible para todos los usuarios</p>
 </div>
 
-```
   <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 20 }}>
     <div>
-      <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar planta en la comunidad…" style={{ marginBottom: 16 }} />
+      <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar planta en la comunidad..." style={{ marginBottom: 16 }} />
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
         {filteredPlants.map(p => (
           <div key={p.id} className="card">
@@ -1187,7 +1162,5 @@ return (
     </div>
   </div>
 </div>
-```
-
 );
 }
