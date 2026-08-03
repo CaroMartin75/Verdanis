@@ -416,9 +416,10 @@ function HomeSection({ plants, garden, tasks, records, plantOfDay, setActiveSect
 // ─────────────────────────────────────────────────────────────
 // PLANT SHEET
 // ─────────────────────────────────────────────────────────────
-function PlantSheet({ plantId, getPlantContext, onBack, updatePlantNote, addTask, gardenId, plants, setPlants, supabase, plantToDb }) {
+// PLANT SHEET — formulario de edicion completo
+function PlantSheet({ plantId, getPlantContext, onBack, updatePlantNote, addTask, gardenId, plants, setPlants, supabase }) {
   const [newNote, setNewNote] = useState("");
-  const [newTaskType, setNewTaskType] = useState("poda");
+  const [newTaskType, setNewTaskType] = useState("observacion");
   const [newTaskDate, setNewTaskDate] = useState(new Date().toISOString().slice(0, 10));
   const [newTaskNote, setNewTaskNote] = useState("");
   const [editMode, setEditMode] = useState(false);
@@ -428,7 +429,24 @@ function PlantSheet({ plantId, getPlantContext, onBack, updatePlantNote, addTask
   const { plant, tasks: ptasks, records: precords, pests: ppests, inBeds } = ctx;
 
   useEffect(() => {
-    if (plant) setEditData({ description: plant.description, notes: plant.offseason });
+    if (plant) setEditData({
+      name: plant.name,
+      emoji: plant.emoji,
+      family: plant.family,
+      description: plant.description,
+      offseason: plant.offseason,
+      lifecycle: plant.lifecycle,
+      sunlight: plant.sunlight,
+      waterDays: plant.waterDays,
+      heightMin: plant.heightCm[0],
+      heightMax: plant.heightCm[1],
+      diameterMin: plant.diameterCm[0],
+      diameterMax: plant.diameterCm[1],
+      flowerColor: plant.flowerColor,
+      floweringSeason: (plant.floweringSeason || []).join(", "),
+      tags: (plant.tags || []).join(", "),
+      role: (plant.role || []).join(", "),
+    });
   }, [plant]);
 
   if (!plant) return null;
@@ -445,17 +463,63 @@ function PlantSheet({ plantId, getPlantContext, onBack, updatePlantNote, addTask
   };
 
   const handleSaveEdit = async () => {
-    const updatedPlant = { ...plant, description: editData.description, offseason: editData.notes };
-    await supabase.from("plants").update({ description: editData.description, offseason: editData.notes }).eq("id", plantId);
-    setPlants(prev => prev.map(p => p.id === plantId ? updatedPlant : p));
+    const updated = {
+      ...plant,
+      name: editData.name,
+      emoji: editData.emoji,
+      family: editData.family,
+      description: editData.description,
+      offseason: editData.offseason,
+      lifecycle: editData.lifecycle,
+      sunlight: editData.sunlight,
+      waterDays: Number(editData.waterDays),
+      heightCm: [Number(editData.heightMin), Number(editData.heightMax)],
+      diameterCm: [Number(editData.diameterMin), Number(editData.diameterMax)],
+      flowerColor: editData.flowerColor,
+      floweringSeason: editData.floweringSeason.split(",").map(s => s.trim()).filter(Boolean),
+      tags: editData.tags.split(",").map(s => s.trim()).filter(Boolean),
+      role: editData.role.split(",").map(s => s.trim()).filter(Boolean),
+    };
+    await supabase.from("plants").update({
+      name: updated.name,
+      emoji: updated.emoji,
+      family: updated.family,
+      description: updated.description,
+      offseason: updated.offseason,
+      lifecycle: updated.lifecycle,
+      sunlight: updated.sunlight,
+      water_days: updated.waterDays,
+      height_min: updated.heightCm[0],
+      height_max: updated.heightCm[1],
+      diameter_min: updated.diameterCm[0],
+      diameter_max: updated.diameterCm[1],
+      flower_color: updated.flowerColor,
+      flowering_season: updated.floweringSeason,
+      tags: updated.tags,
+      role: updated.role,
+    }).eq("id", plantId);
+    setPlants(prev => prev.map(p => p.id === plantId ? updated : p));
     setEditMode(false);
   };
 
-  const taskTypes_es = { poda: "✂️", riego: "💧", fertilización: "🌾", siembra: "🌱", trasplante: "🪴", cosecha: "🧺", tratamiento: "💊", observación: "👁", otro: "📝" };
+  const taskTypes_es = { poda: "✂️", riego: "💧", fertilizacion: "🌾", siembra: "🌱", trasplante: "🪴", cosecha: "🧺", tratamiento: "💊", observacion: "👁", otro: "📝" };
+  const TASK_TYPES = ["riego", "poda", "fertilizacion", "siembra", "trasplante", "cosecha", "tratamiento", "observacion", "otro"];
+  const LIFECYCLE_LABEL = { anual: "🌱 Anual", bianual: "🌿 Bianual", perenne: "🌳 Perenne" };
+
+  const EditField = ({ label, children }) => (
+    <div style={{ marginBottom: 12 }}>
+      <label style={{ display: "block", fontSize: 11, letterSpacing: 1, textTransform: "uppercase", color: "#8a7a5a", marginBottom: 5 }}>{label}</label>
+      {children}
+    </div>
+  );
+
+  const inputStyle = { width: "100%", background: "#faf8f3", border: "1px solid #ddd4c0", borderRadius: 8, padding: "9px 12px", fontSize: 14, color: "#2c2416", outline: "none", fontFamily: "inherit" };
 
   return (
     <div className="fade-in">
       <button onClick={onBack} className="btn-secondary" style={{ marginBottom: 20 }}>← Volver</button>
+
+      {/* Header */}
       <div style={{ display: "flex", alignItems: "flex-start", gap: 20, marginBottom: 28 }}>
         <div style={{ fontSize: 64 }}>{plant.emoji}</div>
         <div style={{ flex: 1 }}>
@@ -474,94 +538,178 @@ function PlantSheet({ plantId, getPlantContext, onBack, updatePlantNote, addTask
         </div>
       </div>
 
-      <div className="grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <div className="card">
-            <div className="section-title">Ficha técnica</div>
-            {editMode
-              ? <><label>Descripción</label><textarea value={editData.description} rows={3} onChange={e => setEditData(d => ({ ...d, description: e.target.value }))} /><label style={{ marginTop: 10 }}>Contraestación</label><textarea value={editData.notes} rows={2} onChange={e => setEditData(d => ({ ...d, notes: e.target.value }))} /></>
-              : <>
-                <p style={{ margin: "0 0 12px", lineHeight: 1.7, color: "#4a3a2a" }}>{plant.description}</p>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: 13 }}>
-                  <InfoRow icon="📏" label="Alto" value={`${plant.heightCm[0]}–${plant.heightCm[1]} cm`} />
-                  <InfoRow icon="⭕" label="Diámetro" value={`${plant.diameterCm[0]}–${plant.diameterCm[1]} cm`} />
-                  <InfoRow icon="☀️" label="Sol" value={plant.sunlight} />
-                  <InfoRow icon="💧" label="Riego" value={`cada ${plant.waterDays}d`} />
-                  <InfoRow icon="🌸" label="Floración" value={(plant.floweringSeason || []).join(", ")} />
-                  <InfoRow icon="🎨" label="Color" value={<span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><span style={{ display: "inline-block", width: 14, height: 14, borderRadius: "50%", background: plant.flowerColor, border: "1px solid #ddd" }} />{plant.flowerColor}</span>} />
-                </div>
+      {/* EDIT MODE — formulario completo */}
+      {editMode && (
+        <div className="card" style={{ marginBottom: 20, borderLeft: "4px solid #8ab860" }}>
+          <div className="section-title">Editar planta</div>
+          <div className="grid-3" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+            <EditField label="Nombre"><input style={inputStyle} value={editData.name} onChange={e => setEditData(d => ({ ...d, name: e.target.value }))} /></EditField>
+            <EditField label="Emoji"><input style={inputStyle} value={editData.emoji} onChange={e => setEditData(d => ({ ...d, emoji: e.target.value }))} /></EditField>
+            <EditField label="Familia botánica"><input style={inputStyle} value={editData.family} onChange={e => setEditData(d => ({ ...d, family: e.target.value }))} /></EditField>
+          </div>
+
+          <EditField label="Descripción">
+            <textarea style={{ ...inputStyle, resize: "vertical" }} rows={3} value={editData.description} onChange={e => setEditData(d => ({ ...d, description: e.target.value }))} />
+          </EditField>
+
+          <EditField label="Contraestación / comportamiento en invierno">
+            <textarea style={{ ...inputStyle, resize: "vertical" }} rows={2} value={editData.offseason} onChange={e => setEditData(d => ({ ...d, offseason: e.target.value }))} placeholder="¿Qué hace esta planta fuera de temporada?" />
+          </EditField>
+
+          <div className="grid-3" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+            <EditField label="Ciclo de vida">
+              <select style={inputStyle} value={editData.lifecycle} onChange={e => setEditData(d => ({ ...d, lifecycle: e.target.value }))}>
+                <option value="anual">Anual</option>
+                <option value="bianual">Bianual</option>
+                <option value="perenne">Perenne</option>
+              </select>
+            </EditField>
+            <EditField label="Luz solar">
+              <select style={inputStyle} value={editData.sunlight} onChange={e => setEditData(d => ({ ...d, sunlight: e.target.value }))}>
+                {["pleno sol", "semisombra", "sombra", "luz indirecta"].map(o => <option key={o} value={o}>{o}</option>)}
+              </select>
+            </EditField>
+            <EditField label="Días entre riego">
+              <input style={inputStyle} type="number" value={editData.waterDays} onChange={e => setEditData(d => ({ ...d, waterDays: e.target.value }))} />
+            </EditField>
+          </div>
+
+          <div className="grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div>
+              <div style={{ fontSize: 11, letterSpacing: 1, textTransform: "uppercase", color: "#8a7a5a", marginBottom: 5 }}>Alto (cm) — mín / máx</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input style={inputStyle} type="number" placeholder="Mín" value={editData.heightMin} onChange={e => setEditData(d => ({ ...d, heightMin: e.target.value }))} />
+                <input style={inputStyle} type="number" placeholder="Máx" value={editData.heightMax} onChange={e => setEditData(d => ({ ...d, heightMax: e.target.value }))} />
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, letterSpacing: 1, textTransform: "uppercase", color: "#8a7a5a", marginBottom: 5 }}>Diámetro (cm) — mín / máx</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input style={inputStyle} type="number" placeholder="Mín" value={editData.diameterMin} onChange={e => setEditData(d => ({ ...d, diameterMin: e.target.value }))} />
+                <input style={inputStyle} type="number" placeholder="Máx" value={editData.diameterMax} onChange={e => setEditData(d => ({ ...d, diameterMax: e.target.value }))} />
+              </div>
+            </div>
+          </div>
+
+          <div className="grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
+            <EditField label="🌸 Temporada de floración (separadas por coma)">
+              <input style={inputStyle} value={editData.floweringSeason} onChange={e => setEditData(d => ({ ...d, floweringSeason: e.target.value }))} placeholder="Primavera, Verano, Agosto..." />
+            </EditField>
+            <EditField label="🎨 Color de flor">
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <input type="color" value={editData.flowerColor} onChange={e => setEditData(d => ({ ...d, flowerColor: e.target.value }))} style={{ width: 50, height: 40, border: "1px solid #ddd4c0", borderRadius: 8, cursor: "pointer" }} />
+                <input style={{ ...inputStyle, flex: 1 }} value={editData.flowerColor} onChange={e => setEditData(d => ({ ...d, flowerColor: e.target.value }))} placeholder="#ffffff" />
+              </div>
+            </EditField>
+          </div>
+
+          <EditField label="🏷️ Etiquetas / tags (separadas por coma)">
+            <input style={inputStyle} value={editData.tags} onChange={e => setEditData(d => ({ ...d, tags: e.target.value }))} placeholder="aromática, comestible, sombra, polinizadores..." />
+          </EditField>
+
+          <EditField label="🌿 Roles en el jardín (separados por coma)">
+            <input style={inputStyle} value={editData.role} onChange={e => setEditData(d => ({ ...d, role: e.target.value }))} placeholder="estructura, floración, producción, aromática..." />
+          </EditField>
+
+          <div style={{ marginTop: 16, display: "flex", gap: 10 }}>
+            <button className="btn-primary" onClick={handleSaveEdit}>💾 Guardar cambios</button>
+            <button className="btn-secondary" onClick={() => setEditMode(false)}>Cancelar</button>
+          </div>
+        </div>
+      )}
+
+      {/* VIEW MODE */}
+      {!editMode && (
+        <div className="grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <div className="card">
+              <div className="section-title">Ficha técnica</div>
+              <p style={{ margin: "0 0 12px", lineHeight: 1.7, color: "#4a3a2a" }}>{plant.description}</p>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: 13 }}>
+                <InfoRow icon="📏" label="Alto" value={`${plant.heightCm[0]}–${plant.heightCm[1]} cm`} />
+                <InfoRow icon="⭕" label="Diámetro" value={`${plant.diameterCm[0]}–${plant.diameterCm[1]} cm`} />
+                <InfoRow icon="☀️" label="Sol" value={plant.sunlight} />
+                <InfoRow icon="💧" label="Riego" value={plant.waterDays ? `cada ${plant.waterDays}d` : "—"} />
+                <InfoRow icon="🌸" label="Floración" value={(plant.floweringSeason || []).join(", ") || "—"} />
+                <InfoRow icon="🎨" label="Color flor" value={
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ display: "inline-block", width: 14, height: 14, borderRadius: "50%", background: plant.flowerColor, border: "1px solid #ddd" }} />
+                    {plant.flowerColor}
+                  </span>
+                } />
+              </div>
+              {plant.offseason && (
                 <div style={{ marginTop: 12, padding: "10px 12px", background: "#f8f4ec", borderRadius: 8, fontSize: 13 }}>
                   <strong style={{ color: "#8a5a2a" }}>🍂 Contraestación:</strong>
                   <p style={{ margin: "4px 0 0", color: "#6a5a3a" }}>{plant.offseason}</p>
                 </div>
-              </>
-            }
-          </div>
+              )}
+            </div>
 
-          <div className="card">
-            <div className="section-title">Ubicación en jardines</div>
-            {inBeds.length === 0
-              ? <p style={{ color: "#8a7a5a", fontSize: 14 }}>No está ubicada en ningún cantero todavía.</p>
-              : inBeds.map(b => (
-                <div key={b.id} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
-                  <span style={{ fontSize: 18 }}>📐</span>
-                  <div><strong style={{ fontSize: 14 }}>{b.name}</strong> <span style={{ fontSize: 12, color: "#8a7a5a" }}>en {b.gardenName}</span></div>
-                </div>
-              ))
-            }
-          </div>
-        </div>
-
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <div className="card">
-            <div className="section-title">Registrar tarea</div>
-            <label>Tipo</label>
-            <select value={newTaskType} onChange={e => setNewTaskType(e.target.value)} style={{ marginBottom: 10 }}>
-              {TASK_TYPES.map(t => <option key={t} value={t}>{taskTypes_es[t] || "📝"} {t}</option>)}
-            </select>
-            <label>Fecha</label>
-            <input type="date" value={newTaskDate} onChange={e => setNewTaskDate(e.target.value)} style={{ marginBottom: 10 }} />
-            <label>Nota</label>
-            <textarea value={newTaskNote} rows={2} onChange={e => setNewTaskNote(e.target.value)} placeholder="¿Cómo quedó? ¿Qué observaste?" style={{ marginBottom: 10 }} />
-            <button className="btn-primary" onClick={handleAddTask}>Guardar tarea</button>
-          </div>
-
-          <div className="card">
-            <div className="section-title">Historial de tareas ({ptasks.length})</div>
-            {ptasks.length === 0
-              ? <p style={{ color: "#8a7a5a", fontSize: 14 }}>Sin tareas registradas aún.</p>
-              : ptasks.map(t => (
-                <div key={t.id} style={{ display: "flex", gap: 10, marginBottom: 10, paddingBottom: 10, borderBottom: "1px solid #f0e8d8" }}>
-                  <span style={{ fontSize: 20 }}>{taskTypes_es[t.type] || "📝"}</span>
-                  <div>
-                    <span style={{ fontSize: 13, fontWeight: 600, color: "#4a3a2a" }}>{t.type}</span>
-                    <div style={{ fontSize: 11, color: "#aaa090" }}>{t.date}</div>
-                    {t.note && <div style={{ fontSize: 13, color: "#6a5a3a", fontStyle: "italic" }}>"{t.note}"</div>}
+            <div className="card">
+              <div className="section-title">Ubicación en jardines</div>
+              {inBeds.length === 0
+                ? <p style={{ color: "#8a7a5a", fontSize: 14 }}>No está ubicada en ningún cantero todavía.</p>
+                : inBeds.map(b => (
+                  <div key={b.id} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
+                    <span style={{ fontSize: 18 }}>📐</span>
+                    <div><strong style={{ fontSize: 14 }}>{b.name}</strong> <span style={{ fontSize: 12, color: "#8a7a5a" }}>en {b.gardenName}</span></div>
                   </div>
-                </div>
-              ))
-            }
+                ))
+              }
+            </div>
           </div>
 
-          <div className="card">
-            <div className="section-title">🌍 Notas de la comunidad ({plant.communityNotes.length})</div>
-            {(plant.communityNotes || []).map((n, i) => (
-              <div key={i} style={{ marginBottom: 10, paddingBottom: 10, borderBottom: "1px solid #f0e8d8" }}>
-                <strong style={{ fontSize: 13 }}>{n.user}</strong>
-                <span style={{ fontSize: 11, color: "#aaa090", marginLeft: 8 }}>{n.date}</span>
-                <p style={{ margin: "4px 0 0", fontSize: 13, color: "#4a3a2a" }}>{n.text}</p>
-              </div>
-            ))}
-            <label>Agregar nota</label>
-            <textarea value={newNote} rows={2} onChange={e => setNewNote(e.target.value)} placeholder="Tu observación sobre esta planta..." style={{ marginBottom: 8 }} />
-            <button className="btn-primary" onClick={handleAddNote}>Publicar nota</button>
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <div className="card">
+              <div className="section-title">Registrar tarea</div>
+              <label>Tipo</label>
+              <select value={newTaskType} onChange={e => setNewTaskType(e.target.value)} style={{ width: "100%", background: "#faf8f3", border: "1px solid #ddd4c0", borderRadius: 8, padding: "9px 12px", fontSize: 14, marginBottom: 10, fontFamily: "inherit" }}>
+                {TASK_TYPES.map(t => <option key={t} value={t}>{taskTypes_es[t] || "📝"} {t}</option>)}
+              </select>
+              <label>Fecha</label>
+              <input type="date" value={newTaskDate} onChange={e => setNewTaskDate(e.target.value)} style={{ width: "100%", background: "#faf8f3", border: "1px solid #ddd4c0", borderRadius: 8, padding: "9px 12px", fontSize: 14, marginBottom: 10, fontFamily: "inherit" }} />
+              <label>Nota / observación</label>
+              <textarea value={newTaskNote} rows={2} onChange={e => setNewTaskNote(e.target.value)} placeholder="¿Cómo quedó? ¿Qué observaste?" style={{ width: "100%", background: "#faf8f3", border: "1px solid #ddd4c0", borderRadius: 8, padding: "9px 12px", fontSize: 14, marginBottom: 10, fontFamily: "inherit", resize: "vertical" }} />
+              <button className="btn-primary" onClick={handleAddTask}>Guardar tarea</button>
+            </div>
+
+            <div className="card">
+              <div className="section-title">Historial de tareas ({ptasks.length})</div>
+              {ptasks.length === 0
+                ? <p style={{ color: "#8a7a5a", fontSize: 14 }}>Sin tareas registradas aún.</p>
+                : ptasks.map(t => (
+                  <div key={t.id} style={{ display: "flex", gap: 10, marginBottom: 10, paddingBottom: 10, borderBottom: "1px solid #f0e8d8" }}>
+                    <span style={{ fontSize: 20 }}>{taskTypes_es[t.type] || "📝"}</span>
+                    <div>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: "#4a3a2a" }}>{t.type}</span>
+                      <div style={{ fontSize: 11, color: "#aaa090" }}>{t.date}</div>
+                      {t.note && <div style={{ fontSize: 13, color: "#6a5a3a", fontStyle: "italic" }}>"{t.note}"</div>}
+                    </div>
+                  </div>
+                ))
+              }
+            </div>
+
+            <div className="card">
+              <div className="section-title">🌍 Notas ({(plant.communityNotes || []).length})</div>
+              {(plant.communityNotes || []).map((n, i) => (
+                <div key={i} style={{ marginBottom: 10, paddingBottom: 10, borderBottom: "1px solid #f0e8d8" }}>
+                  <strong style={{ fontSize: 13 }}>{n.user}</strong>
+                  <span style={{ fontSize: 11, color: "#aaa090", marginLeft: 8 }}>{n.date}</span>
+                  <p style={{ margin: "4px 0 0", fontSize: 13, color: "#4a3a2a" }}>{n.text}</p>
+                </div>
+              ))}
+              <label>Agregar nota</label>
+              <textarea value={newNote} rows={2} onChange={e => setNewNote(e.target.value)} placeholder="Tu observación sobre esta planta..." style={{ width: "100%", background: "#faf8f3", border: "1px solid #ddd4c0", borderRadius: 8, padding: "9px 12px", fontSize: 14, marginBottom: 8, fontFamily: "inherit", resize: "vertical" }} />
+              <button className="btn-primary" onClick={handleAddNote}>Publicar nota</button>
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
-
 function InfoRow({ icon, label, value }) {
   return (
     <div style={{ padding: "6px 0", borderBottom: "1px solid #f5f0e8" }}>
