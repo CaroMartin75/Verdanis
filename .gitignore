@@ -1,0 +1,14 @@
+# dependencies
+node_modules/
+
+# production build
+build/
+
+# local tooling
+.claude/
+
+# misc
+.DS_Store
+.env
+.env.local
+npm-debug.log*

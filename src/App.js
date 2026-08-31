@@ -37,6 +37,19 @@ const SEED_PESTS = [
 const MONTHS = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
 const TASK_TYPES = ["riego","poda","fertilización","siembra","trasplante","cosecha","tratamiento","observación","otro"];
 const LIFECYCLE_LABEL = { anual: "🌱 Anual", bianual: "🌿 Bianual", perenne: "🌳 Perenne" };
+const BITACORA_CATEGORIES = ["clima", "flora silvestre", "fauna", "comunidad", "observación general", "otro"];
+const BITACORA_CATEGORY_ICON = { clima: "🌦", "flora silvestre": "🌼", fauna: "🐝", comunidad: "🏘️", "observación general": "🔎", otro: "📝" };
+const PLANT_STATUSES = ["en tierra", "en maceta", "en espera de plantar", "deseada"];
+const PLANT_STATUS_ICON = { "en tierra": "🌱", "en maceta": "🪴", "en espera de plantar": "⏳", "deseada": "💭" };
+const LEAF_SHAPES = ["acintada", "lobulada", "redondeada", "compuesta", "acicular", "lanceolada"];
+const PLANT_HABITS = ["columnar", "esférico", "rastrero", "trepador", "arbustivo", "arborescente"];
+const GURU_CALENDAR = {
+  0: [{ plant: "Tomate Cherry", action: "Siembra en almácigo en zonas cálidas", source: "Calendario HBA" }],
+  2: [{ plant: "Lavanda", action: "Poda leve post-verano", source: "Calendario HBA" }],
+  8: [{ plant: "Tomate Cherry", action: "Preparar almácigos para siembra primaveral", source: "Calendario HBA" }],
+  9: [{ plant: "Lavanda", action: "Plantar nuevos ejemplares", source: "Calendario HBA" }],
+  10: [{ plant: "Tomate Cherry", action: "Siembra directa en climas cálidos", source: "GardenBA" }],
+};
 
 function getCurrentSeason() {
   const m = new Date().getMonth();
@@ -55,11 +68,16 @@ function dbToPlant(p) {
     diameterCm: [p.diameter_min, p.diameter_max],
     floweringSeason: p.flowering_season || [],
     flowerColor: p.flower_color,
+    foliageColor: p.foliage_color || "",
+    leafShape: p.leaf_shape || "",
+    habit: p.habit || "",
     lifecycle: p.lifecycle, role: p.role || [],
     offseason: p.offseason, waterDays: p.water_days,
     sunlight: p.sunlight, zone: p.zone || [],
     tags: p.tags || [], plantOfDay: p.plant_of_day,
-    communityNotes: p.community_notes || [], images: []
+    communityNotes: p.community_notes || [], images: [],
+    inGarden: p.in_garden !== false,
+    status: p.status || "en tierra"
   };
 }
 
@@ -72,11 +90,16 @@ function plantToDb(p) {
     diameter_min: p.diameterCm[0], diameter_max: p.diameterCm[1],
     flowering_season: p.floweringSeason,
     flower_color: p.flowerColor,
+    foliage_color: p.foliageColor || "",
+    leaf_shape: p.leafShape || "",
+    habit: p.habit || "",
     lifecycle: p.lifecycle, role: p.role,
     offseason: p.offseason, water_days: p.waterDays,
     sunlight: p.sunlight, zone: p.zone,
     tags: p.tags, plant_of_day: p.plantOfDay,
-    community_notes: p.communityNotes
+    community_notes: p.communityNotes,
+    in_garden: p.inGarden !== false,
+    status: p.status || "en tierra"
   };
 }
 
@@ -89,6 +112,9 @@ function dbToRecord(r) {
 function dbToPest(p) {
   return { id: p.id, plantId: p.plant_id, name: p.name, date: p.date, treatment: p.treatment, resolved: p.resolved };
 }
+function dbToBitacora(b) {
+  return { id: b.id, date: b.date, category: b.category, text: b.text, gardenId: b.garden_id || "", plantId: b.plant_id || "" };
+}
 
 // ─────────────────────────────────────────────────────────────
 // MAIN APP
@@ -99,13 +125,16 @@ export default function JardinApp() {
   const [tasks, setTasks] = useState([]);
   const [records, setRecords] = useState([]);
   const [pests, setPests] = useState([]);
+  const [bitacora, setBitacora] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
   const [activeSection, setActiveSection] = useState("inicio");
   const [activeGarden, setActiveGarden] = useState("g1");
   const [selectedPlantId, setSelectedPlantId] = useState(null);
   const [isPublicView, setIsPublicView] = useState(false);
   const [searchQ, setSearchQ] = useState("");
+  const [autoOpenAdd, setAutoOpenAdd] = useState(false);
 
   const garden = gardens.find(g => g.id === activeGarden);
 
@@ -127,12 +156,13 @@ export default function JardinApp() {
         }
 
         // Cargar todos los datos
-        const [p, g, t, r, pe] = await Promise.all([
+        const [p, g, t, r, pe, bt] = await Promise.all([
           supabase.from("plants").select("*"),
           supabase.from("gardens").select("*"),
           supabase.from("tasks").select("*"),
           supabase.from("records").select("*"),
-          supabase.from("pests").select("*")
+          supabase.from("pests").select("*"),
+          supabase.from("bitacora").select("*")
         ]);
 
         setPlants((p.data || []).map(dbToPlant));
@@ -140,6 +170,7 @@ export default function JardinApp() {
         setTasks((t.data || []).map(dbToTask));
         setRecords((r.data || []).map(dbToRecord));
         setPests((pe.data || []).map(dbToPest));
+        setBitacora((bt.data || []).map(dbToBitacora));
         if (g.data && g.data.length > 0) setActiveGarden(g.data[0].id);
       } catch (err) {
         console.error("Error cargando datos:", err);
@@ -155,43 +186,93 @@ export default function JardinApp() {
     const plantRecords = records.filter(r => r.plantId === plantId);
     const plantPests = pests.filter(p => p.plantId === plantId);
     const inBeds = gardens.flatMap(g => (g.beds || []).filter(b => b.plantIds && b.plantIds.includes(plantId)).map(b => ({ ...b, gardenName: g.name })));
-    return { plant, tasks: plantTasks, records: plantRecords, pests: plantPests, inBeds };
-  }, [plants, tasks, records, pests, gardens]);
+    const plantBitacora = bitacora.filter(b => b.plantId === plantId);
+    return { plant, tasks: plantTasks, records: plantRecords, pests: plantPests, inBeds, bitacora: plantBitacora };
+  }, [plants, tasks, records, pests, gardens, bitacora]);
 
   const updatePlantNote = async (plantId, note) => {
     const plant = plants.find(p => p.id === plantId);
     if (!plant) return;
     const newNote = { user: "Yo", date: new Date().toISOString().slice(0, 7), text: note };
     const updatedNotes = [...plant.communityNotes, newNote];
-    await supabase.from("plants").update({ community_notes: updatedNotes }).eq("id", plantId);
-    setPlants(prev => prev.map(p => p.id === plantId ? { ...p, communityNotes: updatedNotes } : p));
+    setSaving(true);
+    try {
+      await supabase.from("plants").update({ community_notes: updatedNotes }).eq("id", plantId);
+      setPlants(prev => prev.map(p => p.id === plantId ? { ...p, communityNotes: updatedNotes } : p));
+    } finally { setSaving(false); }
   };
 
   const addTask = async (task) => {
     const newTask = { id: "t" + Date.now(), plant_id: task.plantId, garden_id: task.gardenId, bed_id: task.bedId || "", type: task.type, date: task.date, note: task.note, learned_pattern: true };
-    await supabase.from("tasks").insert(newTask);
-    setTasks(prev => [...prev, dbToTask(newTask)]);
-    if (task.note) {
-      const newRecord = { id: "r" + Date.now(), plant_id: task.plantId, garden_id: task.gardenId, date: task.date, text: "[" + task.type.toUpperCase() + "] " + task.note, evolution: "neutral" };
-      await supabase.from("records").insert(newRecord);
-      setRecords(prev => [...prev, dbToRecord(newRecord)]);
-    }
+    setSaving(true);
+    try {
+      await supabase.from("tasks").insert(newTask);
+      setTasks(prev => [...prev, dbToTask(newTask)]);
+      if (task.note) {
+        const newRecord = { id: "r" + Date.now(), plant_id: task.plantId, garden_id: task.gardenId, date: task.date, text: "[" + task.type.toUpperCase() + "] " + task.note, evolution: "neutral" };
+        await supabase.from("records").insert(newRecord);
+        setRecords(prev => [...prev, dbToRecord(newRecord)]);
+      }
+    } finally { setSaving(false); }
   };
 
-  const plantOfDay = plants.find(p => p.plantOfDay) || plants[0];
+  const addBitacoraEntry = async (entry) => {
+    const newEntry = { id: "bt" + Date.now(), date: entry.date, category: entry.category, text: entry.text, garden_id: entry.gardenId || null, plant_id: entry.plantId || null };
+    setSaving(true);
+    try {
+      await supabase.from("bitacora").insert(newEntry);
+      setBitacora(prev => [...prev, dbToBitacora(newEntry)]);
+    } finally { setSaving(false); }
+  };
+
+  const promoteToGarden = async (plantId) => {
+    setSaving(true);
+    try {
+      await supabase.from("plants").update({ in_garden: true }).eq("id", plantId);
+      setPlants(prev => prev.map(p => p.id === plantId ? { ...p, inGarden: true } : p));
+    } finally { setSaving(false); }
+  };
+
+  const deletePlant = async (plantId) => {
+    setSaving(true);
+    try {
+      await supabase.from("plants").delete().eq("id", plantId);
+      const affectedGardens = gardens.filter(g => (g.beds || []).some(b => b.plantIds && b.plantIds.includes(plantId)));
+      for (const g of affectedGardens) {
+        const beds = g.beds.map(b => b.plantIds && b.plantIds.includes(plantId) ? { ...b, plantIds: b.plantIds.filter(id => id !== plantId) } : b);
+        await supabase.from("gardens").update({ beds }).eq("id", g.id);
+      }
+      setGardens(prev => prev.map(g => ({ ...g, beds: (g.beds || []).map(b => b.plantIds && b.plantIds.includes(plantId) ? { ...b, plantIds: b.plantIds.filter(id => id !== plantId) } : b) })));
+      setPlants(prev => prev.filter(p => p.id !== plantId));
+    } finally { setSaving(false); }
+  };
+
+  const addPest = async (pest) => {
+    const newPest = { id: "pe" + Date.now(), plant_id: pest.plantId, name: pest.name, date: pest.date, treatment: pest.treatment, resolved: false };
+    setSaving(true);
+    try {
+      await supabase.from("pests").insert(newPest);
+      setPests(prev => [...prev, dbToPest(newPest)]);
+    } finally { setSaving(false); }
+  };
+
+  const gardenPlants = plants.filter(p => p.inGarden);
+  const encyclopediaPlants = plants.filter(p => !p.inGarden);
 
   const navItems = [
     { id: "inicio", label: "Inicio", icon: "🏡" },
     { id: "plantas", label: "Plantas", icon: "🌿" },
     { id: "tareas", label: "Tareas", icon: "✅" },
     { id: "calendario", label: "Calendario", icon: "📅" },
+    { id: "bitacora", label: "Bitácora", icon: "📓" },
     { id: "diseno", label: "Diseño", icon: "📐" },
+    { id: "enciclopedia", label: "Enciclopedia", icon: "📚" },
     { id: "plagas", label: "Plagas", icon: "🐛" },
     { id: "comunidad", label: "Comunidad", icon: "🌍" },
   ];
 
   if (loading) return (
-    <div style={{ minHeight: "100vh", background: "#f5f0e8", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "Palatino, serif" }}>
+    <div style={{ minHeight: "100vh", background: "#f5f0e8", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Inter', -apple-system, sans-serif" }}>
       <div style={{ textAlign: "center" }}>
         <div style={{ fontSize: 48, marginBottom: 16 }}>🌱</div>
         <div style={{ fontSize: 18, color: "#4a7a2a" }}>Cargando Verdanis...</div>
@@ -200,16 +281,22 @@ export default function JardinApp() {
   );
 
   return (
-    <div style={{ minHeight: "100vh", background: "#f5f0e8", fontFamily: "'Palatino Linotype', 'Book Antiqua', Palatino, serif", color: "#2c2416" }}>
+    <div style={{ minHeight: "100vh", background: "#f5f0e8", fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif", color: "#2c2416" }}>
       <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Cormorant+Garamond:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
         * { box-sizing: border-box; }
         ::-webkit-scrollbar { width: 4px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: #b8a882; border-radius: 2px; }
         input, textarea, select { font-family: inherit; }
+        h2 { font-family: 'Cormorant Garamond', serif; }
+        .plant-name-font { font-family: 'Cormorant Garamond', serif; }
+        .logo-font { font-family: 'Libre Baskerville', serif; }
         .plant-link { color: #5a8a3c; text-decoration: underline dotted; cursor: pointer; }
         .plant-link:hover { color: #3a6a20; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid rgba(245,240,232,0.3); border-top-color: #f5f0e8; border-radius: 50%; animation: spin 0.7s linear infinite; }
         .fade-in { animation: fadeIn 0.35s ease; }
         .tag { display: inline-block; background: #e8f0d8; border: 1px solid #c8d8a8; border-radius: 20px; padding: 2px 10px; font-size: 12px; color: #4a6a2a; margin: 2px; }
         .card { background: #fff; border: 1px solid #e0d8c8; border-radius: 12px; padding: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
@@ -248,7 +335,7 @@ export default function JardinApp() {
       <header style={{ background: "#2c2416", color: "#f5f0e8", padding: "0 16px", display: "flex", alignItems: "center", justifyContent: "space-between", height: 52, position: "sticky", top: 0, zIndex: 50, borderBottom: "3px solid #4a7a2a", flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <span style={{ fontSize: 20 }}>🌱</span>
-          <span style={{ fontSize: 17, letterSpacing: 1 }}>Verdanis</span>
+          <span className="logo-font" style={{ fontSize: 17, letterSpacing: 1 }}>Verdanis</span>
           <span style={{ fontSize: 10, opacity: 0.4, letterSpacing: 2 }}>STUDIO</span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -284,8 +371,11 @@ export default function JardinApp() {
                 const name = prompt("Nombre del nuevo jardín:");
                 if (name) {
                   const newG = { id: "g" + Date.now(), name, location: "", zone: "templada", beds: [] };
-                  await supabase.from("gardens").insert(newG);
-                  setGardens(prev => [...prev, newG]);
+                  setSaving(true);
+                  try {
+                    await supabase.from("gardens").insert(newG);
+                    setGardens(prev => [...prev, newG]);
+                  } finally { setSaving(false); }
                 }
               }} style={{ display: "block", width: "100%", textAlign: "left", padding: "6px 8px", background: "transparent", border: "none", color: "#4a6a2a", cursor: "pointer", fontSize: 12, fontFamily: "inherit" }}>
                 ＋ Nuevo jardín
@@ -295,16 +385,18 @@ export default function JardinApp() {
 
           <main className="main-content">
             {selectedPlantId
-              ? <PlantSheet plantId={selectedPlantId} getPlantContext={getPlantContext} onBack={() => setSelectedPlantId(null)} updatePlantNote={updatePlantNote} addTask={addTask} gardenId={activeGarden} plants={plants} setPlants={setPlants} supabase={supabase} plantToDb={plantToDb} />
+              ? <PlantSheet plantId={selectedPlantId} getPlantContext={getPlantContext} onBack={() => setSelectedPlantId(null)} updatePlantNote={updatePlantNote} addTask={addTask} gardenId={activeGarden} plants={plants} setPlants={setPlants} supabase={supabase} plantToDb={plantToDb} promoteToGarden={promoteToGarden} deletePlant={deletePlant} setSaving={setSaving} />
               : (
                 <div className="fade-in">
-                  {activeSection === "inicio" && <HomeSection plants={plants} garden={garden} tasks={tasks} records={records} plantOfDay={plantOfDay} setActiveSection={setActiveSection} setSelectedPlantId={setSelectedPlantId} />}
-                  {activeSection === "plantas" && <PlantsSection plants={plants} setPlants={setPlants} setSelectedPlantId={setSelectedPlantId} garden={garden} searchQ={searchQ} setSearchQ={setSearchQ} getPlantContext={getPlantContext} supabase={supabase} plantToDb={plantToDb} />}
-                  {activeSection === "tareas" && <TasksSection tasks={tasks} plants={plants} gardens={gardens} garden={garden} addTask={addTask} setSelectedPlantId={setSelectedPlantId} />}
-                  {activeSection === "calendario" && <CalendarSection tasks={tasks} plants={plants} garden={garden} setSelectedPlantId={setSelectedPlantId} />}
-                  {activeSection === "diseno" && <DesignSection garden={garden} gardens={gardens} setGardens={setGardens} plants={plants} setSelectedPlantId={setSelectedPlantId} activeGarden={activeGarden} supabase={supabase} />}
-                  {activeSection === "plagas" && <PestsSection pests={pests} setPests={setPests} plants={plants} garden={garden} setSelectedPlantId={setSelectedPlantId} supabase={supabase} />}
-                  {activeSection === "comunidad" && <CommunitySection plants={plants} updatePlantNote={updatePlantNote} setSelectedPlantId={setSelectedPlantId} />}
+                  {activeSection === "inicio" && <HomeSection plants={gardenPlants} garden={garden} gardens={gardens} tasks={tasks} addTask={addTask} addBitacoraEntry={addBitacoraEntry} addPest={addPest} setActiveSection={setActiveSection} setAutoOpenAdd={setAutoOpenAdd} activeGarden={activeGarden} />}
+                  {activeSection === "plantas" && <PlantsSection plants={gardenPlants} setPlants={setPlants} setSelectedPlantId={setSelectedPlantId} garden={garden} searchQ={searchQ} setSearchQ={setSearchQ} getPlantContext={getPlantContext} supabase={supabase} plantToDb={plantToDb} setSaving={setSaving} autoOpenAdd={autoOpenAdd} setAutoOpenAdd={setAutoOpenAdd} />}
+                  {activeSection === "tareas" && <TasksSection tasks={tasks} plants={gardenPlants} gardens={gardens} garden={garden} addTask={addTask} setSelectedPlantId={setSelectedPlantId} />}
+                  {activeSection === "calendario" && <CalendarSection tasks={tasks} plants={plants} garden={garden} setSelectedPlantId={setSelectedPlantId} bitacora={bitacora} gardens={gardens} />}
+                  {activeSection === "bitacora" && <BitacoraSection bitacora={bitacora} addBitacoraEntry={addBitacoraEntry} gardens={gardens} plants={gardenPlants} setSelectedPlantId={setSelectedPlantId} />}
+                  {activeSection === "diseno" && <DesignSection garden={garden} gardens={gardens} setGardens={setGardens} plants={gardenPlants} encyclopediaPlants={encyclopediaPlants} promoteToGarden={promoteToGarden} setSelectedPlantId={setSelectedPlantId} activeGarden={activeGarden} supabase={supabase} setSaving={setSaving} />}
+                  {activeSection === "enciclopedia" && <EncyclopediaSection plants={encyclopediaPlants} setPlants={setPlants} setSelectedPlantId={setSelectedPlantId} supabase={supabase} setSaving={setSaving} />}
+                  {activeSection === "plagas" && <PestsSection pests={pests} setPests={setPests} plants={gardenPlants} garden={garden} setSelectedPlantId={setSelectedPlantId} supabase={supabase} addPest={addPest} setSaving={setSaving} autoOpenAdd={autoOpenAdd} setAutoOpenAdd={setAutoOpenAdd} />}
+                  {activeSection === "comunidad" && <CommunitySection plants={gardenPlants} updatePlantNote={updatePlantNote} setSelectedPlantId={setSelectedPlantId} />}
                 </div>
               )
             }
@@ -322,6 +414,13 @@ export default function JardinApp() {
           ))}
         </nav>
       </div>
+
+      {saving && (
+        <div style={{ position: "fixed", bottom: 20, right: 20, zIndex: 200, background: "#2c2416", color: "#f5f0e8", padding: "10px 18px", borderRadius: 20, fontSize: 13, boxShadow: "0 4px 16px rgba(0,0,0,0.25)", display: "flex", alignItems: "center", gap: 8 }}>
+          <span className="spinner" />
+          Guardando...
+        </div>
+      )}
     </div>
   );
 }
@@ -329,84 +428,174 @@ export default function JardinApp() {
 // ─────────────────────────────────────────────────────────────
 // HOME
 // ─────────────────────────────────────────────────────────────
-function HomeSection({ plants, garden, tasks, records, plantOfDay, setActiveSection, setSelectedPlantId }) {
+function HomeSection({ plants, garden, gardens, tasks, addTask, addBitacoraEntry, addPest, setActiveSection, setAutoOpenAdd, activeGarden }) {
   const season = getCurrentSeason();
-  const recentTasks = tasks.slice(-3).reverse();
-  const recentRecords = records.slice(-2).reverse();
+  const monthIdx = new Date().getMonth();
+  const guruThisMonth = GURU_CALENDAR[monthIdx] || [];
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [quickModal, setQuickModal] = useState(null); // 'tarea' | 'observacion' | 'plaga' | 'nota'
+
+  const REGISTER_OPTIONS = [
+    { id: "tarea", label: "Tarea", icon: "✅" },
+    { id: "planta", label: "Planta nueva", icon: "🌿" },
+    { id: "observacion", label: "Observación", icon: "🔎" },
+    { id: "plaga", label: "Plaga", icon: "🐛" },
+    { id: "nota", label: "Nota de calendario", icon: "📓" },
+  ];
+
+  const selectOption = (id) => {
+    setMenuOpen(false);
+    if (id === "planta") { setActiveSection("plantas"); setAutoOpenAdd(true); return; }
+    setQuickModal(id);
+  };
 
   return (
     <div>
-      <div style={{ marginBottom: 28 }}>
+      <div style={{ marginBottom: 24 }}>
         <div className="section-title">Panel principal</div>
         <h2 style={{ margin: 0, fontSize: 28, fontWeight: 400 }}>{garden?.name} <span style={{ fontSize: 16, color: "#8a7a5a" }}>— {season}</span></h2>
         <div style={{ color: "#8a7a5a", fontSize: 14, marginTop: 4 }}>{garden?.location} · Zona {garden?.zone}</div>
       </div>
 
-      <div className="grid-3" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 24 }}>
-        <div className="card" style={{ borderLeft: "4px solid #4a7a2a" }}>
-          <div style={{ fontSize: 28 }}>🌿</div>
-          <div style={{ fontSize: 32, fontWeight: 400, marginTop: 4 }}>{plants.length}</div>
-          <div style={{ fontSize: 13, color: "#8a7a5a" }}>Plantas registradas</div>
-        </div>
-        <div className="card" style={{ borderLeft: "4px solid #e8a020" }}>
-          <div style={{ fontSize: 28 }}>✅</div>
-          <div style={{ fontSize: 32, fontWeight: 400, marginTop: 4 }}>{tasks.length}</div>
-          <div style={{ fontSize: 13, color: "#8a7a5a" }}>Tareas realizadas</div>
-        </div>
-        <div className="card" style={{ borderLeft: "4px solid #5a8ab0" }}>
-          <div style={{ fontSize: 28 }}>📖</div>
-          <div style={{ fontSize: 32, fontWeight: 400, marginTop: 4 }}>{records.length}</div>
-          <div style={{ fontSize: 13, color: "#8a7a5a" }}>Registros de evolución</div>
-        </div>
+      <div className="card" style={{ marginBottom: 28, borderLeft: "4px solid #5a8ab0" }}>
+        <div className="section-title">🌍 Resumen de expertos — {MONTHS[monthIdx]}</div>
+        {guruThisMonth.length === 0
+          ? <p style={{ color: "#8a7a5a", fontSize: 14, margin: 0 }}>Sin recomendaciones este mes.</p>
+          : guruThisMonth.map((g, i) => (
+            <div key={i} style={{ marginBottom: i < guruThisMonth.length - 1 ? 12 : 0 }}>
+              <div style={{ fontWeight: 600, fontSize: 14, color: "#3a5a80" }}>🌿 {g.plant}</div>
+              <div style={{ fontSize: 13, marginTop: 2 }}>{g.action}</div>
+              <div style={{ fontSize: 11, color: "#aaa090" }}>Fuente: {g.source}</div>
+            </div>
+          ))
+        }
       </div>
 
-      <div className="grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-        {plantOfDay && (
-          <div className="card" style={{ background: "linear-gradient(135deg, #1a3010, #2a5020)", color: "#e8f5d8", border: "none" }}>
-            <div style={{ fontSize: 11, letterSpacing: 3, textTransform: "uppercase", color: "#8ab860", marginBottom: 12 }}>🌟 Planta del día</div>
-            <div style={{ fontSize: 36 }}>{plantOfDay.emoji}</div>
-            <div style={{ fontSize: 22, fontWeight: 400, margin: "8px 0 4px" }}>{plantOfDay.name}</div>
-            <div style={{ fontSize: 13, color: "#a8d880", lineHeight: 1.6 }}>{plantOfDay.description}</div>
-            <div style={{ marginTop: 12, display: "flex", flexWrap: "wrap", gap: 4 }}>
-              {(plantOfDay.tags || []).map(t => <span key={t} style={{ background: "rgba(138,184,96,0.2)", border: "1px solid rgba(138,184,96,0.3)", borderRadius: 20, padding: "2px 10px", fontSize: 11, color: "#a8d880" }}>{t}</span>)}
-            </div>
-            <button onClick={() => setSelectedPlantId(plantOfDay.id)} style={{ marginTop: 14, background: "rgba(138,184,96,0.2)", border: "1px solid rgba(138,184,96,0.4)", color: "#a8d880", padding: "8px 16px", borderRadius: 8, cursor: "pointer", fontSize: 13, fontFamily: "inherit" }}>
-              Ver ficha completa →
-            </button>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "40px 0", position: "relative" }}>
+        <button className="btn-primary" onClick={() => setMenuOpen(v => !v)}
+          style={{ fontSize: 17, padding: "16px 36px", borderRadius: 40, boxShadow: "0 4px 16px rgba(74,122,42,0.3)" }}>
+          ＋ Registrar
+        </button>
+        {menuOpen && (
+          <div style={{ position: "absolute", top: "calc(100% - 10px)", background: "#fff", border: "1px solid #e0d8c8", borderRadius: 12, boxShadow: "0 8px 24px rgba(0,0,0,0.12)", overflow: "hidden", minWidth: 220, zIndex: 60 }}>
+            {REGISTER_OPTIONS.map(opt => (
+              <button key={opt.id} onClick={() => selectOption(opt.id)}
+                style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "12px 18px", background: "none", border: "none", borderBottom: "1px solid #f5f0e8", cursor: "pointer", fontSize: 14, fontFamily: "inherit", textAlign: "left", color: "#2c2416" }}>
+                <span style={{ fontSize: 18 }}>{opt.icon}</span>{opt.label}
+              </button>
+            ))}
           </div>
         )}
+      </div>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <div className="card">
-            <div className="section-title">Actividad reciente</div>
-            {recentTasks.map(t => {
-              const pl = plants.find(p => p.id === t.plantId);
-              return (
-                <div key={t.id} style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 10, paddingBottom: 10, borderBottom: "1px solid #f0e8d8" }}>
-                  <span style={{ fontSize: 20 }}>{pl?.emoji}</span>
-                  <div>
-                    <span className="plant-link" onClick={() => setSelectedPlantId(t.plantId)} style={{ fontSize: 14, fontWeight: 600 }}>{pl?.name}</span>
-                    <span style={{ fontSize: 13, color: "#8a7a5a" }}> — {t.type}</span>
-                    <div style={{ fontSize: 12, color: "#aaa090" }}>{t.date}</div>
-                    {t.note && <div style={{ fontSize: 13, color: "#6a5a3a", marginTop: 2, fontStyle: "italic" }}>"{t.note}"</div>}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          <div className="card">
-            <div className="section-title">Últimas observaciones</div>
-            {recentRecords.map(r => {
-              const pl = plants.find(p => p.id === r.plantId);
-              return (
-                <div key={r.id} style={{ marginBottom: 8 }}>
-                  <span className="plant-link" onClick={() => setSelectedPlantId(r.plantId)} style={{ fontSize: 14 }}>{pl?.emoji} {pl?.name}</span>
-                  <div style={{ fontSize: 13, color: "#6a5a3a", fontStyle: "italic", marginTop: 2 }}>"{r.text}"</div>
-                  <div style={{ fontSize: 11, color: "#aaa090" }}>{r.date}</div>
-                </div>
-              );
-            })}
-          </div>
+      {quickModal && (
+        <QuickRegisterModal
+          type={quickModal}
+          plants={plants}
+          gardens={gardens}
+          activeGarden={activeGarden}
+          addTask={addTask}
+          addBitacoraEntry={addBitacoraEntry}
+          addPest={addPest}
+          onClose={() => setQuickModal(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function QuickRegisterModal({ type, plants, gardens, activeGarden, addTask, addBitacoraEntry, addPest, onClose }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const taskTypes_es = { poda: "✂️", riego: "💧", fertilización: "🌾", siembra: "🌱", trasplante: "🪴", cosecha: "🧺", tratamiento: "💊", observación: "👁", otro: "📝" };
+  const [taskForm, setTaskForm] = useState({ plantId: plants[0]?.id || "", type: "observación", date: today, note: "" });
+  const [noteForm, setNoteForm] = useState({ date: today, category: type === "nota" ? "otro" : "observación general", text: "", gardenId: activeGarden || "", plantId: "" });
+  const [pestForm, setPestForm] = useState({ plantId: plants[0]?.id || "", name: "", date: today, treatment: "" });
+
+  const titles = { tarea: "Registrar tarea", observacion: "Registrar observación", plaga: "Registrar plaga", nota: "Nota de calendario" };
+
+  const handleSubmit = () => {
+    if (type === "tarea") {
+      if (!taskForm.plantId) return;
+      addTask({ plantId: taskForm.plantId, gardenId: activeGarden, bedId: "", type: taskForm.type, date: taskForm.date, note: taskForm.note });
+    } else if (type === "observacion" || type === "nota") {
+      if (!noteForm.text.trim()) return;
+      addBitacoraEntry(noteForm);
+    } else if (type === "plaga") {
+      if (!pestForm.name.trim() || !pestForm.plantId) return;
+      addPest(pestForm);
+    }
+    onClose();
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(44,36,22,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100, padding: 16 }} onClick={onClose}>
+      <div className="card" style={{ maxWidth: 440, width: "100%", borderLeft: "4px solid #4a7a2a" }} onClick={e => e.stopPropagation()}>
+        <div className="section-title">{titles[type]}</div>
+
+        {type === "tarea" && (
+          <>
+            <label>Planta</label>
+            <select value={taskForm.plantId} onChange={e => setTaskForm(f => ({ ...f, plantId: e.target.value }))} style={{ marginBottom: 10 }}>
+              {plants.map(p => <option key={p.id} value={p.id}>{p.emoji} {p.name}</option>)}
+            </select>
+            <label>Tipo</label>
+            <select value={taskForm.type} onChange={e => setTaskForm(f => ({ ...f, type: e.target.value }))} style={{ marginBottom: 10 }}>
+              {TASK_TYPES.map(t => <option key={t} value={t}>{taskTypes_es[t] || "📝"} {t}</option>)}
+            </select>
+            <label>Fecha</label>
+            <input type="date" value={taskForm.date} onChange={e => setTaskForm(f => ({ ...f, date: e.target.value }))} style={{ marginBottom: 10 }} />
+            <label>Nota</label>
+            <textarea rows={2} value={taskForm.note} onChange={e => setTaskForm(f => ({ ...f, note: e.target.value }))} placeholder="¿Qué observaste?" style={{ marginBottom: 10 }} />
+          </>
+        )}
+
+        {(type === "observacion" || type === "nota") && (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div><label>Fecha</label><input type="date" value={noteForm.date} onChange={e => setNoteForm(f => ({ ...f, date: e.target.value }))} /></div>
+              <div><label>Categoría</label>
+                <select value={noteForm.category} onChange={e => setNoteForm(f => ({ ...f, category: e.target.value }))}>
+                  {BITACORA_CATEGORIES.map(c => <option key={c} value={c}>{BITACORA_CATEGORY_ICON[c]} {c}</option>)}
+                </select>
+              </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
+              <div><label>Jardín</label>
+                <select value={noteForm.gardenId} onChange={e => setNoteForm(f => ({ ...f, gardenId: e.target.value }))}>
+                  <option value="">🌍 General</option>
+                  {gardens.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+                </select>
+              </div>
+              <div><label>Planta (opcional)</label>
+                <select value={noteForm.plantId} onChange={e => setNoteForm(f => ({ ...f, plantId: e.target.value }))}>
+                  <option value="">— Sin planta —</option>
+                  {plants.map(p => <option key={p.id} value={p.id}>{p.emoji} {p.name}</option>)}
+                </select>
+              </div>
+            </div>
+            <label style={{ marginTop: 10 }}>Texto</label>
+            <textarea rows={3} value={noteForm.text} onChange={e => setNoteForm(f => ({ ...f, text: e.target.value }))} placeholder="¿Qué observaste?" style={{ marginBottom: 10 }} />
+          </>
+        )}
+
+        {type === "plaga" && (
+          <>
+            <label>Planta</label>
+            <select value={pestForm.plantId} onChange={e => setPestForm(f => ({ ...f, plantId: e.target.value }))} style={{ marginBottom: 10 }}>
+              {plants.map(p => <option key={p.id} value={p.id}>{p.emoji} {p.name}</option>)}
+            </select>
+            <label>Plaga</label>
+            <input type="text" value={pestForm.name} onChange={e => setPestForm(f => ({ ...f, name: e.target.value }))} placeholder="Mosca blanca, pulgón…" style={{ marginBottom: 10 }} />
+            <label>Fecha</label>
+            <input type="date" value={pestForm.date} onChange={e => setPestForm(f => ({ ...f, date: e.target.value }))} style={{ marginBottom: 10 }} />
+            <label>Tratamiento</label>
+            <textarea rows={2} value={pestForm.treatment} onChange={e => setPestForm(f => ({ ...f, treatment: e.target.value }))} style={{ marginBottom: 10 }} />
+          </>
+        )}
+
+        <div style={{ display: "flex", gap: 10, marginTop: 6 }}>
+          <button className="btn-primary" onClick={handleSubmit}>Guardar</button>
+          <button className="btn-secondary" onClick={onClose}>Cancelar</button>
         </div>
       </div>
     </div>
@@ -417,7 +606,7 @@ function HomeSection({ plants, garden, tasks, records, plantOfDay, setActiveSect
 // PLANT SHEET
 // ─────────────────────────────────────────────────────────────
 // PLANT SHEET — formulario de edicion completo
-function PlantSheet({ plantId, getPlantContext, onBack, updatePlantNote, addTask, gardenId, plants, setPlants, supabase }) {
+function PlantSheet({ plantId, getPlantContext, onBack, updatePlantNote, addTask, gardenId, plants, setPlants, supabase, promoteToGarden, deletePlant, setSaving }) {
   const [newNote, setNewNote] = useState("");
   const [newTaskType, setNewTaskType] = useState("observacion");
   const [newTaskDate, setNewTaskDate] = useState(new Date().toISOString().slice(0, 10));
@@ -426,7 +615,7 @@ function PlantSheet({ plantId, getPlantContext, onBack, updatePlantNote, addTask
   const [editData, setEditData] = useState({});
 
   const ctx = getPlantContext(plantId);
-  const { plant, tasks: ptasks, records: precords, pests: ppests, inBeds } = ctx;
+  const { plant, tasks: ptasks, records: precords, pests: ppests, inBeds, bitacora: pbitacora } = ctx;
 
   useEffect(() => {
     if (plant) setEditData({
@@ -436,6 +625,7 @@ function PlantSheet({ plantId, getPlantContext, onBack, updatePlantNote, addTask
       description: plant.description || "",
       offseason: plant.offseason || "",
       lifecycle: plant.lifecycle || "perenne",
+      status: plant.status || "en tierra",
       sunlight: plant.sunlight || "pleno sol",
       waterDays: plant.waterDays || 3,
       heightMin: plant.heightCm ? plant.heightCm[0] : 30,
@@ -443,6 +633,9 @@ function PlantSheet({ plantId, getPlantContext, onBack, updatePlantNote, addTask
       diameterMin: plant.diameterCm ? plant.diameterCm[0] : 20,
       diameterMax: plant.diameterCm ? plant.diameterCm[1] : 40,
       flowerColor: plant.flowerColor || "#ffffff",
+      foliageColor: plant.foliageColor || "#4a7a2a",
+      leafShape: plant.leafShape || "",
+      habit: plant.habit || "",
       floweringSeason: (plant.floweringSeason || []).join(", "),
       sowingSeason: (plant.sowingSeason || []).join(", "),
       transplantSeason: (plant.transplantSeason || []).join(", "),
@@ -473,39 +666,56 @@ function PlantSheet({ plantId, getPlantContext, onBack, updatePlantNote, addTask
       description: editData.description,
       offseason: editData.offseason,
       lifecycle: editData.lifecycle,
+      status: editData.status,
       sunlight: editData.sunlight,
       waterDays: Number(editData.waterDays),
       heightCm: [Number(editData.heightMin), Number(editData.heightMax)],
       diameterCm: [Number(editData.diameterMin), Number(editData.diameterMax)],
       flowerColor: editData.flowerColor,
+      foliageColor: editData.foliageColor,
+      leafShape: editData.leafShape,
+      habit: editData.habit,
       floweringSeason: editData.floweringSeason.split(",").map(s => s.trim()).filter(Boolean),
       sowingSeason: editData.sowingSeason.split(",").map(s => s.trim()).filter(Boolean),
       transplantSeason: editData.transplantSeason.split(",").map(s => s.trim()).filter(Boolean),
       tags: editData.tags.split(",").map(s => s.trim()).filter(Boolean),
       role: editData.role.split(",").map(s => s.trim()).filter(Boolean),
     };
-    await supabase.from("plants").update({
-      name: updated.name,
-      emoji: updated.emoji,
-      family: updated.family,
-      description: updated.description,
-      offseason: updated.offseason,
-      lifecycle: updated.lifecycle,
-      sunlight: updated.sunlight,
-      water_days: updated.waterDays,
-      height_min: updated.heightCm[0],
-      height_max: updated.heightCm[1],
-      diameter_min: updated.diameterCm[0],
-      diameter_max: updated.diameterCm[1],
-      flower_color: updated.flowerColor,
-      flowering_season: updated.floweringSeason,
-      sowing_season: updated.sowingSeason,
-      transplant_season: updated.transplantSeason,
-      tags: updated.tags,
-      role: updated.role,
-    }).eq("id", plantId);
-    setPlants(prev => prev.map(p => p.id === plantId ? updated : p));
-    setEditMode(false);
+    setSaving(true);
+    try {
+      await supabase.from("plants").update({
+        name: updated.name,
+        emoji: updated.emoji,
+        family: updated.family,
+        description: updated.description,
+        offseason: updated.offseason,
+        lifecycle: updated.lifecycle,
+        status: updated.status,
+        sunlight: updated.sunlight,
+        water_days: updated.waterDays,
+        height_min: updated.heightCm[0],
+        height_max: updated.heightCm[1],
+        diameter_min: updated.diameterCm[0],
+        diameter_max: updated.diameterCm[1],
+        flower_color: updated.flowerColor,
+        foliage_color: updated.foliageColor,
+        leaf_shape: updated.leafShape,
+        habit: updated.habit,
+        flowering_season: updated.floweringSeason,
+        sowing_season: updated.sowingSeason,
+        transplant_season: updated.transplantSeason,
+        tags: updated.tags,
+        role: updated.role,
+      }).eq("id", plantId);
+      setPlants(prev => prev.map(p => p.id === plantId ? updated : p));
+      setEditMode(false);
+    } finally { setSaving(false); }
+  };
+
+  const handleDelete = async () => {
+    if (!window.confirm(`¿Borrar "${plant.name}" definitivamente? Esta acción no se puede deshacer.`)) return;
+    await deletePlant(plantId);
+    onBack();
   };
 
   const TASK_TYPES = ["riego", "poda", "fertilizacion", "siembra", "trasplante", "cosecha", "tratamiento", "observacion", "otro"];
@@ -522,18 +732,22 @@ function PlantSheet({ plantId, getPlantContext, onBack, updatePlantNote, addTask
       <div style={{ display: "flex", alignItems: "flex-start", gap: 20, marginBottom: 28 }}>
         <div style={{ fontSize: 64 }}>{plant.emoji}</div>
         <div style={{ flex: 1 }}>
-          <div className="section-title">Ficha de planta</div>
+          <div className="section-title">{plant.inGarden ? "Ficha de planta" : "Ficha de enciclopedia"}</div>
           <h2 style={{ margin: 0, fontSize: 32, fontWeight: 400 }}>{plant.name}</h2>
           <div style={{ fontSize: 14, color: "#8a7a5a", fontStyle: "italic", marginTop: 2 }}>{plant.family}</div>
           <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 4 }}>
+            {!plant.inGarden && <span className="badge" style={{ background: "#e8e0f5", color: "#5a4a8a" }}>📚 Enciclopedia</span>}
             <span className="badge" style={{ background: "#e8f0d8", color: "#4a7a2a" }}>{LIFECYCLE_LABEL[plant.lifecycle]}</span>
+            <span className="badge" style={{ background: "#f0e8d8", color: "#7a5a2a" }}>{PLANT_STATUS_ICON[plant.status] || "🌱"} {plant.status || "en tierra"}</span>
             {(plant.role || []).map(r => <span key={r} className="badge" style={{ background: "#f0e8d8", color: "#7a5a2a" }}>{r}</span>)}
             {(plant.tags || []).map(t => <span key={t} className="tag">{t}</span>)}
           </div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
+          {!plant.inGarden && <button className="btn-primary" onClick={() => promoteToGarden(plantId)}>🌱 Sumar a mi jardín</button>}
           <button className="btn-secondary" onClick={() => setEditMode(v => !v)}>{editMode ? "Cancelar" : "✏️ Editar"}</button>
           {editMode && <button className="btn-primary" onClick={handleSaveEdit}>💾 Guardar</button>}
+          <button className="btn-secondary" onClick={handleDelete} style={{ color: "#c04020", borderColor: "#e0c8b8" }}>🗑 Borrar</button>
         </div>
       </div>
 
@@ -555,12 +769,17 @@ function PlantSheet({ plantId, getPlantContext, onBack, updatePlantNote, addTask
             <textarea style={{ ...inp, resize: "vertical" }} rows={2} value={editData.offseason} onChange={e => setEditData(d => ({ ...d, offseason: e.target.value }))} placeholder="¿Pierde hojas? ¿Descansa? ¿Qué cuidados necesita?" />
           </Field>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
             <Field label="Ciclo de vida">
               <select style={inp} value={editData.lifecycle} onChange={e => setEditData(d => ({ ...d, lifecycle: e.target.value }))}>
                 <option value="anual">🌱 Anual</option>
                 <option value="bianual">🌿 Bianual</option>
                 <option value="perenne">🌳 Perenne</option>
+              </select>
+            </Field>
+            <Field label="🪴 Estado">
+              <select style={inp} value={editData.status} onChange={e => setEditData(d => ({ ...d, status: e.target.value }))}>
+                {PLANT_STATUSES.map(s => <option key={s} value={s}>{PLANT_STATUS_ICON[s]} {s}</option>)}
               </select>
             </Field>
             <Field label="☀️ Luz solar">
@@ -599,6 +818,27 @@ function PlantSheet({ plantId, getPlantContext, onBack, updatePlantNote, addTask
                 <input type="color" value={editData.flowerColor} onChange={e => setEditData(d => ({ ...d, flowerColor: e.target.value }))} style={{ width: 46, height: 40, border: "1px solid #ddd4c0", borderRadius: 8, cursor: "pointer", padding: 2 }} />
                 <input style={{ ...inp, flex: 1 }} value={editData.flowerColor} onChange={e => setEditData(d => ({ ...d, flowerColor: e.target.value }))} placeholder="#ffffff" />
               </div>
+            </Field>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
+            <Field label="🍃 Color de follaje">
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <input type="color" value={editData.foliageColor} onChange={e => setEditData(d => ({ ...d, foliageColor: e.target.value }))} style={{ width: 46, height: 40, border: "1px solid #ddd4c0", borderRadius: 8, cursor: "pointer", padding: 2 }} />
+                <input style={{ ...inp, flex: 1 }} value={editData.foliageColor} onChange={e => setEditData(d => ({ ...d, foliageColor: e.target.value }))} placeholder="#4a7a2a" />
+              </div>
+            </Field>
+            <Field label="🍁 Forma de hoja">
+              <select style={inp} value={editData.leafShape} onChange={e => setEditData(d => ({ ...d, leafShape: e.target.value }))}>
+                <option value="">— Sin especificar —</option>
+                {LEAF_SHAPES.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </Field>
+            <Field label="🌳 Porte">
+              <select style={inp} value={editData.habit} onChange={e => setEditData(d => ({ ...d, habit: e.target.value }))}>
+                <option value="">— Sin especificar —</option>
+                {PLANT_HABITS.map(h => <option key={h} value={h}>{h}</option>)}
+              </select>
             </Field>
           </div>
 
@@ -646,6 +886,16 @@ function PlantSheet({ plantId, getPlantContext, onBack, updatePlantNote, addTask
                     {plant.flowerColor}
                   </span>
                 } />
+                {plant.foliageColor && (
+                  <InfoRow icon="🍃" label="Color follaje" value={
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ display: "inline-block", width: 14, height: 14, borderRadius: "50%", background: plant.foliageColor, border: "1px solid #ddd" }} />
+                      {plant.foliageColor}
+                    </span>
+                  } />
+                )}
+                {plant.leafShape && <InfoRow icon="🍁" label="Forma de hoja" value={plant.leafShape} />}
+                {plant.habit && <InfoRow icon="🌳" label="Porte" value={plant.habit} />}
               </div>
               {plant.offseason && (
                 <div style={{ marginTop: 12, padding: "10px 12px", background: "#f8f4ec", borderRadius: 8, fontSize: 13 }}>
@@ -667,38 +917,57 @@ function PlantSheet({ plantId, getPlantContext, onBack, updatePlantNote, addTask
                 ))
               }
             </div>
+
+            {pbitacora.length > 0 && (
+              <div className="card">
+                <div className="section-title">📓 Bitácora relacionada ({pbitacora.length})</div>
+                {pbitacora.slice().sort((a, b) => b.date.localeCompare(a.date)).map(b => (
+                  <div key={b.id} style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 10, paddingBottom: 10, borderBottom: "1px solid #f0e8d8" }}>
+                    <span style={{ fontSize: 18 }}>{BITACORA_CATEGORY_ICON[b.category] || "📝"}</span>
+                    <div>
+                      <div style={{ fontSize: 13, color: "#4a3a2a" }}>{b.text}</div>
+                      <div style={{ fontSize: 11, color: "#aaa090", marginTop: 2 }}>{b.date} · {b.category}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <div className="card">
-              <div className="section-title">Registrar tarea</div>
-              <label>Tipo</label>
-              <select value={newTaskType} onChange={e => setNewTaskType(e.target.value)} style={{ width: "100%", background: "#faf8f3", border: "1px solid #ddd4c0", borderRadius: 8, padding: "9px 12px", fontSize: 14, marginBottom: 10, fontFamily: "inherit" }}>
-                {TASK_TYPES.map(t => <option key={t} value={t}>{taskTypes_es[t] || "📝"} {t}</option>)}
-              </select>
-              <label>Fecha</label>
-              <input type="date" value={newTaskDate} onChange={e => setNewTaskDate(e.target.value)} style={{ width: "100%", background: "#faf8f3", border: "1px solid #ddd4c0", borderRadius: 8, padding: "9px 12px", fontSize: 14, marginBottom: 10, fontFamily: "inherit" }} />
-              <label>Nota / observación</label>
-              <textarea value={newTaskNote} rows={2} onChange={e => setNewTaskNote(e.target.value)} placeholder="¿Qué observaste? ¿Cómo quedó?" style={{ width: "100%", background: "#faf8f3", border: "1px solid #ddd4c0", borderRadius: 8, padding: "9px 12px", fontSize: 14, marginBottom: 10, fontFamily: "inherit", resize: "vertical" }} />
-              <button className="btn-primary" onClick={handleAddTask}>Guardar tarea</button>
-            </div>
+            {plant.inGarden && (
+              <div className="card">
+                <div className="section-title">Registrar tarea</div>
+                <label>Tipo</label>
+                <select value={newTaskType} onChange={e => setNewTaskType(e.target.value)} style={{ width: "100%", background: "#faf8f3", border: "1px solid #ddd4c0", borderRadius: 8, padding: "9px 12px", fontSize: 14, marginBottom: 10, fontFamily: "inherit" }}>
+                  {TASK_TYPES.map(t => <option key={t} value={t}>{taskTypes_es[t] || "📝"} {t}</option>)}
+                </select>
+                <label>Fecha</label>
+                <input type="date" value={newTaskDate} onChange={e => setNewTaskDate(e.target.value)} style={{ width: "100%", background: "#faf8f3", border: "1px solid #ddd4c0", borderRadius: 8, padding: "9px 12px", fontSize: 14, marginBottom: 10, fontFamily: "inherit" }} />
+                <label>Nota / observación</label>
+                <textarea value={newTaskNote} rows={2} onChange={e => setNewTaskNote(e.target.value)} placeholder="¿Qué observaste? ¿Cómo quedó?" style={{ width: "100%", background: "#faf8f3", border: "1px solid #ddd4c0", borderRadius: 8, padding: "9px 12px", fontSize: 14, marginBottom: 10, fontFamily: "inherit", resize: "vertical" }} />
+                <button className="btn-primary" onClick={handleAddTask}>Guardar tarea</button>
+              </div>
+            )}
 
-            <div className="card">
-              <div className="section-title">Historial de tareas ({ptasks.length})</div>
-              {ptasks.length === 0
-                ? <p style={{ color: "#8a7a5a", fontSize: 14 }}>Sin tareas registradas aún.</p>
-                : ptasks.slice().sort((a, b) => b.date.localeCompare(a.date)).map(t => (
-                  <div key={t.id} style={{ display: "flex", gap: 10, marginBottom: 10, paddingBottom: 10, borderBottom: "1px solid #f0e8d8" }}>
-                    <span style={{ fontSize: 20 }}>{taskTypes_es[t.type] || "📝"}</span>
-                    <div>
-                      <span style={{ fontSize: 13, fontWeight: 600, color: "#4a3a2a" }}>{t.type}</span>
-                      <div style={{ fontSize: 11, color: "#aaa090" }}>{t.date}</div>
-                      {t.note && <div style={{ fontSize: 13, color: "#6a5a3a", fontStyle: "italic" }}>"{t.note}"</div>}
+            {plant.inGarden && (
+              <div className="card">
+                <div className="section-title">Historial de tareas ({ptasks.length})</div>
+                {ptasks.length === 0
+                  ? <p style={{ color: "#8a7a5a", fontSize: 14 }}>Sin tareas registradas aún.</p>
+                  : ptasks.slice().sort((a, b) => b.date.localeCompare(a.date)).map(t => (
+                    <div key={t.id} style={{ display: "flex", gap: 10, marginBottom: 10, paddingBottom: 10, borderBottom: "1px solid #f0e8d8" }}>
+                      <span style={{ fontSize: 20 }}>{taskTypes_es[t.type] || "📝"}</span>
+                      <div>
+                        <span style={{ fontSize: 13, fontWeight: 600, color: "#4a3a2a" }}>{t.type}</span>
+                        <div style={{ fontSize: 11, color: "#aaa090" }}>{t.date}</div>
+                        {t.note && <div style={{ fontSize: 13, color: "#6a5a3a", fontStyle: "italic" }}>"{t.note}"</div>}
+                      </div>
                     </div>
-                  </div>
-                ))
-              }
-            </div>
+                  ))
+                }
+              </div>
+            )}
 
             <div className="card">
               <div className="section-title">📝 Notas ({(plant.communityNotes || []).length})</div>
@@ -732,9 +1001,16 @@ function InfoRow({ icon, label, value }) {
 // ─────────────────────────────────────────────────────────────
 // PLANTS SECTION
 // ─────────────────────────────────────────────────────────────
-function PlantsSection({ plants, setPlants, setSelectedPlantId, garden, searchQ, setSearchQ, getPlantContext, supabase, plantToDb }) {
+function PlantsSection({ plants, setPlants, setSelectedPlantId, garden, searchQ, setSearchQ, getPlantContext, supabase, plantToDb, setSaving, autoOpenAdd, setAutoOpenAdd }) {
   const [showAdd, setShowAdd] = useState(false);
-  const emptyPlant = { name: "", emoji: "🌿", family: "", description: "", heightCm: [30, 60], diameterCm: [20, 40], floweringSeason: [], sowingSeason: [], transplantSeason: [], flowerColor: "#ffffff", lifecycle: "perenne", role: [], offseason: "", waterDays: 3, sunlight: "pleno sol", zone: ["templada"], tags: [], communityNotes: [], plantOfDay: false, images: [] };
+
+  useEffect(() => {
+    if (autoOpenAdd) {
+      setShowAdd(true);
+      setAutoOpenAdd(false);
+    }
+  }, [autoOpenAdd, setAutoOpenAdd]);
+  const emptyPlant = { name: "", emoji: "", family: "", description: "", heightCm: ["", ""], diameterCm: ["", ""], floweringSeason: [], sowingSeason: [], transplantSeason: [], flowerColor: "", foliageColor: "", leafShape: "", habit: "", lifecycle: "", role: [], offseason: "", waterDays: "", sunlight: "", zone: ["templada"], tags: [], communityNotes: [], plantOfDay: false, images: [], inGarden: true, status: "" };
   const [newPlant, setNewPlant] = useState(emptyPlant);
   const [newFloweringSeason, setNewFloweringSeason] = useState("");
   const [newSowingSeason, setNewSowingSeason] = useState("");
@@ -743,13 +1019,15 @@ function PlantsSection({ plants, setPlants, setSelectedPlantId, garden, searchQ,
   const [newRole, setNewRole] = useState("");
   const [filterLC, setFilterLC] = useState("todos");
   const [filterSun, setFilterSun] = useState("todos");
+  const [filterStatus, setFilterStatus] = useState("todos");
 
   const filtered = plants.filter(p => {
     const q = searchQ.toLowerCase();
     const matchQ = !q || p.name.toLowerCase().includes(q) || (p.tags || []).join(" ").toLowerCase().includes(q) || (p.role || []).join(" ").toLowerCase().includes(q) || (p.floweringSeason || []).join(" ").toLowerCase().includes(q);
     const matchLC = filterLC === "todos" || p.lifecycle === filterLC;
     const matchSun = filterSun === "todos" || p.sunlight === filterSun;
-    return matchQ && matchLC && matchSun;
+    const matchStatus = filterStatus === "todos" || p.status === filterStatus;
+    return matchQ && matchLC && matchSun && matchStatus;
   });
 
   const addPlant = async () => {
@@ -757,6 +1035,17 @@ function PlantsSection({ plants, setPlants, setSelectedPlantId, garden, searchQ,
     const plant = {
       ...newPlant,
       id: "p" + Date.now(),
+      emoji: newPlant.emoji || "🌿",
+      lifecycle: newPlant.lifecycle || "perenne",
+      sunlight: newPlant.sunlight || "pleno sol",
+      status: newPlant.status || "en tierra",
+      flowerColor: newPlant.flowerColor || "#ffffff",
+      foliageColor: newPlant.foliageColor || "",
+      leafShape: newPlant.leafShape || "",
+      habit: newPlant.habit || "",
+      waterDays: Number(newPlant.waterDays) || 3,
+      heightCm: [Number(newPlant.heightCm[0]) || 30, Number(newPlant.heightCm[1]) || 60],
+      diameterCm: [Number(newPlant.diameterCm[0]) || 20, Number(newPlant.diameterCm[1]) || 40],
       floweringSeason: newFloweringSeason.split(",").map(s => s.trim()).filter(Boolean),
       sowingSeason: newSowingSeason.split(",").map(s => s.trim()).filter(Boolean),
       transplantSeason: newTransplantSeason.split(",").map(s => s.trim()).filter(Boolean),
@@ -771,18 +1060,24 @@ function PlantsSection({ plants, setPlants, setSelectedPlantId, garden, searchQ,
       height_min: plant.heightCm[0], height_max: plant.heightCm[1],
       diameter_min: plant.diameterCm[0], diameter_max: plant.diameterCm[1],
       flower_color: plant.flowerColor,
+      foliage_color: plant.foliageColor,
+      leaf_shape: plant.leafShape,
+      habit: plant.habit,
       flowering_season: plant.floweringSeason,
       sowing_season: plant.sowingSeason,
       transplant_season: plant.transplantSeason,
       tags: plant.tags, role: plant.role,
-      plant_of_day: false, community_notes: []
+      plant_of_day: false, community_notes: [], in_garden: true, status: plant.status
     };
-    await supabase.from("plants").insert(dbPlant);
-    setPlants(prev => [...prev, plant]);
-    setShowAdd(false);
-    setNewPlant(emptyPlant);
-    setNewFloweringSeason(""); setNewSowingSeason(""); setNewTransplantSeason("");
-    setNewTags(""); setNewRole("");
+    setSaving(true);
+    try {
+      await supabase.from("plants").insert(dbPlant);
+      setPlants(prev => [...prev, plant]);
+      setShowAdd(false);
+      setNewPlant(emptyPlant);
+      setNewFloweringSeason(""); setNewSowingSeason(""); setNewTransplantSeason("");
+      setNewTags(""); setNewRole("");
+    } finally { setSaving(false); }
   };
 
   const inp = { width: "100%", background: "#faf8f3", border: "1px solid #ddd4c0", borderRadius: 8, padding: "9px 12px", fontSize: 14, color: "#2c2416", outline: "none", fontFamily: "inherit" };
@@ -817,6 +1112,13 @@ function PlantsSection({ plants, setPlants, setSelectedPlantId, garden, searchQ,
             {s === "todos" ? "todos" : s === "pleno sol" ? "☀️ sol" : s === "semisombra" ? "🌤 semisombra" : "🌑 sombra"}
           </button>
         ))}
+        <span style={{ fontSize: 12, color: "#8a7a5a", alignSelf: "center", marginLeft: 8 }}>Estado:</span>
+        {["todos", ...PLANT_STATUSES].map(s => (
+          <button key={s} onClick={() => setFilterStatus(s)} className="btn-secondary"
+            style={{ background: filterStatus === s ? "#4a7a2a" : undefined, color: filterStatus === s ? "#fff" : undefined, borderColor: filterStatus === s ? "#4a7a2a" : undefined, fontSize: 12, padding: "5px 12px" }}>
+            {s === "todos" ? "todos" : `${PLANT_STATUS_ICON[s]} ${s}`}
+          </button>
+        ))}
       </div>
 
       {/* Formulario nueva planta */}
@@ -828,6 +1130,14 @@ function PlantsSection({ plants, setPlants, setSelectedPlantId, garden, searchQ,
             <div><Lbl>Nombre</Lbl><input style={inp} value={newPlant.name} onChange={e => setNewPlant(p => ({ ...p, name: e.target.value }))} placeholder="Magnolia Soulangeana, Lavanda..." /></div>
             <div><Lbl>Emoji</Lbl><input style={inp} value={newPlant.emoji} onChange={e => setNewPlant(p => ({ ...p, emoji: e.target.value }))} /></div>
             <div><Lbl>Familia botánica</Lbl><input style={inp} value={newPlant.family} onChange={e => setNewPlant(p => ({ ...p, family: e.target.value }))} placeholder="Magnoliaceae..." /></div>
+          </div>
+
+          <div style={{ marginBottom: 12 }}>
+            <Lbl>🪴 Estado</Lbl>
+            <select style={inp} value={newPlant.status} onChange={e => setNewPlant(p => ({ ...p, status: e.target.value }))}>
+              <option value="">— Elegir —</option>
+              {PLANT_STATUSES.map(s => <option key={s} value={s}>{PLANT_STATUS_ICON[s]} {s}</option>)}
+            </select>
           </div>
 
           <div style={{ marginBottom: 12 }}>
@@ -843,6 +1153,7 @@ function PlantsSection({ plants, setPlants, setSelectedPlantId, garden, searchQ,
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
             <div><Lbl>Ciclo de vida</Lbl>
               <select style={inp} value={newPlant.lifecycle} onChange={e => setNewPlant(p => ({ ...p, lifecycle: e.target.value }))}>
+                <option value="">— Elegir —</option>
                 <option value="anual">🌱 Anual</option>
                 <option value="bianual">🌿 Bianual</option>
                 <option value="perenne">🌳 Perenne</option>
@@ -850,11 +1161,33 @@ function PlantsSection({ plants, setPlants, setSelectedPlantId, garden, searchQ,
             </div>
             <div><Lbl>☀️ Luz solar</Lbl>
               <select style={inp} value={newPlant.sunlight} onChange={e => setNewPlant(p => ({ ...p, sunlight: e.target.value }))}>
+                <option value="">— Elegir —</option>
                 {["pleno sol", "semisombra", "sombra", "luz indirecta"].map(o => <option key={o} value={o}>{o}</option>)}
               </select>
             </div>
             <div><Lbl>💧 Días entre riego</Lbl>
-              <input style={inp} type="number" min="1" value={newPlant.waterDays} onChange={e => setNewPlant(p => ({ ...p, waterDays: Number(e.target.value) }))} />
+              <input style={inp} type="number" min="1" value={newPlant.waterDays} onChange={e => setNewPlant(p => ({ ...p, waterDays: e.target.value === "" ? "" : Number(e.target.value) }))} />
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
+            <div><Lbl>🍁 Forma de hoja</Lbl>
+              <select style={inp} value={newPlant.leafShape} onChange={e => setNewPlant(p => ({ ...p, leafShape: e.target.value }))}>
+                <option value="">— Sin especificar —</option>
+                {LEAF_SHAPES.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+            <div><Lbl>🌳 Porte</Lbl>
+              <select style={inp} value={newPlant.habit} onChange={e => setNewPlant(p => ({ ...p, habit: e.target.value }))}>
+                <option value="">— Sin especificar —</option>
+                {PLANT_HABITS.map(h => <option key={h} value={h}>{h}</option>)}
+              </select>
+            </div>
+            <div><Lbl>🍃 Color de follaje</Lbl>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <input type="color" value={newPlant.foliageColor || "#4a7a2a"} onChange={e => setNewPlant(p => ({ ...p, foliageColor: e.target.value }))} style={{ width: 46, height: 40, border: "1px solid #ddd4c0", borderRadius: 8, cursor: "pointer", padding: 2 }} />
+                <input style={{ ...inp, flex: 1 }} value={newPlant.foliageColor} onChange={e => setNewPlant(p => ({ ...p, foliageColor: e.target.value }))} placeholder="#4a7a2a" />
+              </div>
             </div>
           </div>
 
@@ -862,15 +1195,15 @@ function PlantsSection({ plants, setPlants, setSelectedPlantId, garden, searchQ,
             <div>
               <Lbl>📏 Altura final (cm) — mínima / máxima</Lbl>
               <div style={{ display: "flex", gap: 8 }}>
-                <input style={inp} type="number" placeholder="Mín" value={newPlant.heightCm[0]} onChange={e => setNewPlant(p => ({ ...p, heightCm: [Number(e.target.value), p.heightCm[1]] }))} />
-                <input style={inp} type="number" placeholder="Máx" value={newPlant.heightCm[1]} onChange={e => setNewPlant(p => ({ ...p, heightCm: [p.heightCm[0], Number(e.target.value)] }))} />
+                <input style={inp} type="number" placeholder="Mín" value={newPlant.heightCm[0]} onChange={e => setNewPlant(p => ({ ...p, heightCm: [e.target.value === "" ? "" : Number(e.target.value), p.heightCm[1]] }))} />
+                <input style={inp} type="number" placeholder="Máx" value={newPlant.heightCm[1]} onChange={e => setNewPlant(p => ({ ...p, heightCm: [p.heightCm[0], e.target.value === "" ? "" : Number(e.target.value)] }))} />
               </div>
             </div>
             <div>
               <Lbl>⭕ Diámetro final (cm) — mínimo / máximo</Lbl>
               <div style={{ display: "flex", gap: 8 }}>
-                <input style={inp} type="number" placeholder="Mín" value={newPlant.diameterCm[0]} onChange={e => setNewPlant(p => ({ ...p, diameterCm: [Number(e.target.value), p.diameterCm[1]] }))} />
-                <input style={inp} type="number" placeholder="Máx" value={newPlant.diameterCm[1]} onChange={e => setNewPlant(p => ({ ...p, diameterCm: [p.diameterCm[0], Number(e.target.value)] }))} />
+                <input style={inp} type="number" placeholder="Mín" value={newPlant.diameterCm[0]} onChange={e => setNewPlant(p => ({ ...p, diameterCm: [e.target.value === "" ? "" : Number(e.target.value), p.diameterCm[1]] }))} />
+                <input style={inp} type="number" placeholder="Máx" value={newPlant.diameterCm[1]} onChange={e => setNewPlant(p => ({ ...p, diameterCm: [p.diameterCm[0], e.target.value === "" ? "" : Number(e.target.value)] }))} />
               </div>
             </div>
           </div>
@@ -935,8 +1268,11 @@ function PlantsSection({ plants, setPlants, setSelectedPlantId, garden, searchQ,
                   )}
                 </div>
               </div>
-              <div style={{ fontSize: 17, fontWeight: 600, marginTop: 8 }}>{plant.name}</div>
+              <div className="plant-name-font" style={{ fontSize: 19, fontWeight: 600, marginTop: 8 }}>{plant.name}</div>
               <div style={{ fontSize: 12, color: "#8a7a5a", fontStyle: "italic" }}>{plant.family}</div>
+              <div style={{ marginTop: 6 }}>
+                <span className="badge" style={{ background: "#e8f0d8", color: "#4a7a2a" }}>{PLANT_STATUS_ICON[plant.status] || "🌱"} {plant.status || "en tierra"}</span>
+              </div>
               {(plant.floweringSeason || []).length > 0 && (
                 <div style={{ fontSize: 12, color: "#6a8a4a", marginTop: 4 }}>🌸 {plant.floweringSeason.join(", ")}</div>
               )}
@@ -964,6 +1300,295 @@ function PlantsSection({ plants, setPlants, setSelectedPlantId, garden, searchQ,
     </div>
   );
 }
+
+// ─────────────────────────────────────────────────────────────
+// ENCYCLOPEDIA SECTION — fichas de plantas que no están en el jardín
+// ─────────────────────────────────────────────────────────────
+function EncyclopediaSection({ plants, setPlants, setSelectedPlantId, supabase, setSaving }) {
+  const [showAdd, setShowAdd] = useState(false);
+  const emptyPlant = { name: "", emoji: "", family: "", description: "", heightCm: ["", ""], diameterCm: ["", ""], floweringSeason: [], sowingSeason: [], transplantSeason: [], flowerColor: "", foliageColor: "", leafShape: "", habit: "", lifecycle: "", role: [], offseason: "", waterDays: "", sunlight: "", zone: ["templada"], tags: [], communityNotes: [], plantOfDay: false, images: [], inGarden: false, status: "" };
+  const [newPlant, setNewPlant] = useState(emptyPlant);
+  const [newFloweringSeason, setNewFloweringSeason] = useState("");
+  const [newSowingSeason, setNewSowingSeason] = useState("");
+  const [newTransplantSeason, setNewTransplantSeason] = useState("");
+  const [newTags, setNewTags] = useState("");
+  const [newRole, setNewRole] = useState("");
+  const [searchQ, setSearchQ] = useState("");
+  const [filterLC, setFilterLC] = useState("todos");
+  const [filterSun, setFilterSun] = useState("todos");
+  const [filterStatus, setFilterStatus] = useState("todos");
+
+  const filtered = plants.filter(p => {
+    const q = searchQ.toLowerCase();
+    const matchQ = !q || p.name.toLowerCase().includes(q) || (p.tags || []).join(" ").toLowerCase().includes(q) || (p.role || []).join(" ").toLowerCase().includes(q) || (p.floweringSeason || []).join(" ").toLowerCase().includes(q);
+    const matchLC = filterLC === "todos" || p.lifecycle === filterLC;
+    const matchSun = filterSun === "todos" || p.sunlight === filterSun;
+    const matchStatus = filterStatus === "todos" || p.status === filterStatus;
+    return matchQ && matchLC && matchSun && matchStatus;
+  });
+
+  const addPlant = async () => {
+    if (!newPlant.name.trim()) return;
+    const plant = {
+      ...newPlant,
+      id: "p" + Date.now(),
+      emoji: newPlant.emoji || "🌿",
+      lifecycle: newPlant.lifecycle || "perenne",
+      sunlight: newPlant.sunlight || "pleno sol",
+      status: newPlant.status || "deseada",
+      flowerColor: newPlant.flowerColor || "#ffffff",
+      foliageColor: newPlant.foliageColor || "",
+      leafShape: newPlant.leafShape || "",
+      habit: newPlant.habit || "",
+      waterDays: Number(newPlant.waterDays) || 3,
+      heightCm: [Number(newPlant.heightCm[0]) || 30, Number(newPlant.heightCm[1]) || 60],
+      diameterCm: [Number(newPlant.diameterCm[0]) || 20, Number(newPlant.diameterCm[1]) || 40],
+      floweringSeason: newFloweringSeason.split(",").map(s => s.trim()).filter(Boolean),
+      sowingSeason: newSowingSeason.split(",").map(s => s.trim()).filter(Boolean),
+      transplantSeason: newTransplantSeason.split(",").map(s => s.trim()).filter(Boolean),
+      tags: newTags.split(",").map(s => s.trim()).filter(Boolean),
+      role: newRole.split(",").map(s => s.trim()).filter(Boolean),
+    };
+    const dbPlant = {
+      id: plant.id, name: plant.name, emoji: plant.emoji, family: plant.family,
+      description: plant.description, offseason: plant.offseason,
+      lifecycle: plant.lifecycle, sunlight: plant.sunlight,
+      water_days: plant.waterDays,
+      height_min: plant.heightCm[0], height_max: plant.heightCm[1],
+      diameter_min: plant.diameterCm[0], diameter_max: plant.diameterCm[1],
+      flower_color: plant.flowerColor,
+      foliage_color: plant.foliageColor,
+      leaf_shape: plant.leafShape,
+      habit: plant.habit,
+      flowering_season: plant.floweringSeason,
+      sowing_season: plant.sowingSeason,
+      transplant_season: plant.transplantSeason,
+      tags: plant.tags, role: plant.role,
+      plant_of_day: false, community_notes: [], in_garden: false, status: plant.status
+    };
+    setSaving(true);
+    try {
+      await supabase.from("plants").insert(dbPlant);
+      setPlants(prev => [...prev, plant]);
+      setShowAdd(false);
+      setNewPlant(emptyPlant);
+      setNewFloweringSeason(""); setNewSowingSeason(""); setNewTransplantSeason("");
+      setNewTags(""); setNewRole("");
+    } finally { setSaving(false); }
+  };
+
+  const inp = { width: "100%", background: "#faf8f3", border: "1px solid #ddd4c0", borderRadius: 8, padding: "9px 12px", fontSize: 14, color: "#2c2416", outline: "none", fontFamily: "inherit" };
+  const Lbl = ({ children }) => <div style={{ fontSize: 11, letterSpacing: 1, textTransform: "uppercase", color: "#8a7a5a", marginBottom: 5 }}>{children}</div>;
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+        <div>
+          <div className="section-title">Fichas botánicas de referencia</div>
+          <h2 style={{ margin: 0, fontSize: 24, fontWeight: 400 }}>Enciclopedia ({plants.length})</h2>
+          <div style={{ fontSize: 13, color: "#8a7a5a", marginTop: 4 }}>Plantas que no tenés todavía, guardadas para diseño futuro.</div>
+        </div>
+        <button className="btn-primary" onClick={() => setShowAdd(v => !v)}>＋ Nueva ficha</button>
+      </div>
+
+      <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
+        <input type="text" value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Buscar por nombre, etiqueta, rol, floración…" style={{ ...inp, flex: 1, minWidth: 200 }} />
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 12, color: "#8a7a5a", alignSelf: "center" }}>Ciclo:</span>
+        {["todos", "anual", "bianual", "perenne"].map(lc => (
+          <button key={lc} onClick={() => setFilterLC(lc)} className="btn-secondary"
+            style={{ background: filterLC === lc ? "#5a4a8a" : undefined, color: filterLC === lc ? "#fff" : undefined, borderColor: filterLC === lc ? "#5a4a8a" : undefined, fontSize: 12, padding: "5px 12px" }}>
+            {lc}
+          </button>
+        ))}
+        <span style={{ fontSize: 12, color: "#8a7a5a", alignSelf: "center", marginLeft: 8 }}>Luz:</span>
+        {["todos", "pleno sol", "semisombra", "sombra"].map(s => (
+          <button key={s} onClick={() => setFilterSun(s)} className="btn-secondary"
+            style={{ background: filterSun === s ? "#5a4a8a" : undefined, color: filterSun === s ? "#fff" : undefined, borderColor: filterSun === s ? "#5a4a8a" : undefined, fontSize: 12, padding: "5px 12px" }}>
+            {s === "todos" ? "todos" : s === "pleno sol" ? "☀️ sol" : s === "semisombra" ? "🌤 semisombra" : "🌑 sombra"}
+          </button>
+        ))}
+        <span style={{ fontSize: 12, color: "#8a7a5a", alignSelf: "center", marginLeft: 8 }}>Estado:</span>
+        {["todos", ...PLANT_STATUSES].map(s => (
+          <button key={s} onClick={() => setFilterStatus(s)} className="btn-secondary"
+            style={{ background: filterStatus === s ? "#5a4a8a" : undefined, color: filterStatus === s ? "#fff" : undefined, borderColor: filterStatus === s ? "#5a4a8a" : undefined, fontSize: 12, padding: "5px 12px" }}>
+            {s === "todos" ? "todos" : `${PLANT_STATUS_ICON[s]} ${s}`}
+          </button>
+        ))}
+      </div>
+
+      {showAdd && (
+        <div className="card" style={{ marginBottom: 20, borderLeft: "4px solid #5a4a8a" }}>
+          <div className="section-title">Nueva ficha de enciclopedia</div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
+            <div><Lbl>Nombre</Lbl><input style={inp} value={newPlant.name} onChange={e => setNewPlant(p => ({ ...p, name: e.target.value }))} placeholder="Magnolia Soulangeana, Salvia..." /></div>
+            <div><Lbl>Emoji</Lbl><input style={inp} value={newPlant.emoji} onChange={e => setNewPlant(p => ({ ...p, emoji: e.target.value }))} /></div>
+            <div><Lbl>Familia botánica</Lbl><input style={inp} value={newPlant.family} onChange={e => setNewPlant(p => ({ ...p, family: e.target.value }))} placeholder="Magnoliaceae..." /></div>
+          </div>
+
+          <div style={{ marginBottom: 12 }}>
+            <Lbl>🪴 Estado</Lbl>
+            <select style={inp} value={newPlant.status} onChange={e => setNewPlant(p => ({ ...p, status: e.target.value }))}>
+              <option value="">— Elegir —</option>
+              {PLANT_STATUSES.map(s => <option key={s} value={s}>{PLANT_STATUS_ICON[s]} {s}</option>)}
+            </select>
+          </div>
+
+          <div style={{ marginBottom: 12 }}>
+            <Lbl>Descripción general</Lbl>
+            <textarea style={{ ...inp, resize: "vertical" }} rows={2} value={newPlant.description} onChange={e => setNewPlant(p => ({ ...p, description: e.target.value }))} placeholder="Características principales, origen, usos..." />
+          </div>
+
+          <div style={{ marginBottom: 12 }}>
+            <Lbl>🍂 Contraestación</Lbl>
+            <textarea style={{ ...inp, resize: "vertical" }} rows={2} value={newPlant.offseason} onChange={e => setNewPlant(p => ({ ...p, offseason: e.target.value }))} placeholder="¿Pierde hojas? ¿Descansa? ¿Qué cuidados necesita fuera de temporada?" />
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
+            <div><Lbl>Ciclo de vida</Lbl>
+              <select style={inp} value={newPlant.lifecycle} onChange={e => setNewPlant(p => ({ ...p, lifecycle: e.target.value }))}>
+                <option value="">— Elegir —</option>
+                <option value="anual">🌱 Anual</option>
+                <option value="bianual">🌿 Bianual</option>
+                <option value="perenne">🌳 Perenne</option>
+              </select>
+            </div>
+            <div><Lbl>☀️ Luz solar</Lbl>
+              <select style={inp} value={newPlant.sunlight} onChange={e => setNewPlant(p => ({ ...p, sunlight: e.target.value }))}>
+                <option value="">— Elegir —</option>
+                {["pleno sol", "semisombra", "sombra", "luz indirecta"].map(o => <option key={o} value={o}>{o}</option>)}
+              </select>
+            </div>
+            <div><Lbl>💧 Días entre riego</Lbl>
+              <input style={inp} type="number" min="1" value={newPlant.waterDays} onChange={e => setNewPlant(p => ({ ...p, waterDays: e.target.value === "" ? "" : Number(e.target.value) }))} />
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
+            <div><Lbl>🍁 Forma de hoja</Lbl>
+              <select style={inp} value={newPlant.leafShape} onChange={e => setNewPlant(p => ({ ...p, leafShape: e.target.value }))}>
+                <option value="">— Sin especificar —</option>
+                {LEAF_SHAPES.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+            <div><Lbl>🌳 Porte</Lbl>
+              <select style={inp} value={newPlant.habit} onChange={e => setNewPlant(p => ({ ...p, habit: e.target.value }))}>
+                <option value="">— Sin especificar —</option>
+                {PLANT_HABITS.map(h => <option key={h} value={h}>{h}</option>)}
+              </select>
+            </div>
+            <div><Lbl>🍃 Color de follaje</Lbl>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <input type="color" value={newPlant.foliageColor || "#4a7a2a"} onChange={e => setNewPlant(p => ({ ...p, foliageColor: e.target.value }))} style={{ width: 46, height: 40, border: "1px solid #ddd4c0", borderRadius: 8, cursor: "pointer", padding: 2 }} />
+                <input style={{ ...inp, flex: 1 }} value={newPlant.foliageColor} onChange={e => setNewPlant(p => ({ ...p, foliageColor: e.target.value }))} placeholder="#4a7a2a" />
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+            <div>
+              <Lbl>📏 Altura final (cm) — mínima / máxima</Lbl>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input style={inp} type="number" placeholder="Mín" value={newPlant.heightCm[0]} onChange={e => setNewPlant(p => ({ ...p, heightCm: [e.target.value === "" ? "" : Number(e.target.value), p.heightCm[1]] }))} />
+                <input style={inp} type="number" placeholder="Máx" value={newPlant.heightCm[1]} onChange={e => setNewPlant(p => ({ ...p, heightCm: [p.heightCm[0], e.target.value === "" ? "" : Number(e.target.value)] }))} />
+              </div>
+            </div>
+            <div>
+              <Lbl>⭕ Diámetro final (cm) — mínimo / máximo</Lbl>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input style={inp} type="number" placeholder="Mín" value={newPlant.diameterCm[0]} onChange={e => setNewPlant(p => ({ ...p, diameterCm: [e.target.value === "" ? "" : Number(e.target.value), p.diameterCm[1]] }))} />
+                <input style={inp} type="number" placeholder="Máx" value={newPlant.diameterCm[1]} onChange={e => setNewPlant(p => ({ ...p, diameterCm: [p.diameterCm[0], e.target.value === "" ? "" : Number(e.target.value)] }))} />
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+            <div>
+              <Lbl>🌸 Época de floración (separadas por coma)</Lbl>
+              <input style={inp} value={newFloweringSeason} onChange={e => setNewFloweringSeason(e.target.value)} placeholder="Agosto, Septiembre, Primavera..." />
+            </div>
+            <div>
+              <Lbl>🎨 Color de flor</Lbl>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <input type="color" value={newPlant.flowerColor} onChange={e => setNewPlant(p => ({ ...p, flowerColor: e.target.value }))} style={{ width: 46, height: 40, border: "1px solid #ddd4c0", borderRadius: 8, cursor: "pointer", padding: 2 }} />
+                <input style={{ ...inp, flex: 1 }} value={newPlant.flowerColor} onChange={e => setNewPlant(p => ({ ...p, flowerColor: e.target.value }))} />
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+            <div>
+              <Lbl>🌱 Época de siembra (separadas por coma)</Lbl>
+              <input style={inp} value={newSowingSeason} onChange={e => setNewSowingSeason(e.target.value)} placeholder="Marzo, Abril, Otoño..." />
+            </div>
+            <div>
+              <Lbl>🪴 Época de trasplante (separadas por coma)</Lbl>
+              <input style={inp} value={newTransplantSeason} onChange={e => setNewTransplantSeason(e.target.value)} placeholder="Septiembre, Octubre..." />
+            </div>
+          </div>
+
+          <div style={{ marginBottom: 12 }}>
+            <Lbl>🏷️ Etiquetas (separadas por coma)</Lbl>
+            <input style={inp} value={newTags} onChange={e => setNewTags(e.target.value)} placeholder="aromática, comestible, polinizadores, sequía, sombra..." />
+          </div>
+
+          <div style={{ marginBottom: 16 }}>
+            <Lbl>🌿 Roles en el jardín (separados por coma)</Lbl>
+            <input style={inp} value={newRole} onChange={e => setNewRole(e.target.value)} placeholder="estructura, floración, producción, aromática, cobertura..." />
+          </div>
+
+          <div style={{ display: "flex", gap: 10 }}>
+            <button className="btn-primary" onClick={addPlant}>＋ Agregar ficha</button>
+            <button className="btn-secondary" onClick={() => setShowAdd(false)}>Cancelar</button>
+          </div>
+        </div>
+      )}
+
+      <div className="grid-auto" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 14 }}>
+        {filtered.map(plant => (
+          <div key={plant.id} className="card" style={{ cursor: "pointer", transition: "box-shadow 0.2s", borderTop: "3px solid #5a4a8a" }}
+            onClick={() => setSelectedPlantId(plant.id)}
+            onMouseEnter={e => e.currentTarget.style.boxShadow = "0 4px 20px rgba(90,74,138,0.2)"}
+            onMouseLeave={e => e.currentTarget.style.boxShadow = "0 2px 8px rgba(0,0,0,0.05)"}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+              <span style={{ fontSize: 36 }}>{plant.emoji}</span>
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+                <span className="badge" style={{ background: "#e8e0f5", color: "#5a4a8a", fontSize: 11 }}>📚 enciclopedia</span>
+                {plant.flowerColor && plant.flowerColor !== "#ffffff" && (
+                  <span style={{ display: "inline-block", width: 14, height: 14, borderRadius: "50%", background: plant.flowerColor, border: "1px solid #ddd" }} title="Color de flor" />
+                )}
+              </div>
+            </div>
+            <div style={{ fontSize: 17, fontWeight: 600, marginTop: 8 }}>{plant.name}</div>
+            <div style={{ fontSize: 12, color: "#8a7a5a", fontStyle: "italic" }}>{plant.family}</div>
+            <div style={{ marginTop: 6 }}>
+              <span className="badge" style={{ background: "#e8f0d8", color: "#4a7a2a" }}>{PLANT_STATUS_ICON[plant.status] || "💭"} {plant.status || "deseada"}</span>
+            </div>
+            {(plant.floweringSeason || []).length > 0 && (
+              <div style={{ fontSize: 12, color: "#6a8a4a", marginTop: 4 }}>🌸 {plant.floweringSeason.join(", ")}</div>
+            )}
+            <div style={{ fontSize: 13, color: "#6a5a3a", marginTop: 4, lineHeight: 1.5 }}>{(plant.description || "").slice(0, 70)}{plant.description?.length > 70 ? "…" : ""}</div>
+            <div style={{ marginTop: 6, display: "flex", flexWrap: "wrap", gap: 3 }}>
+              {(plant.role || []).slice(0, 2).map(r => <span key={r} className="tag">{r}</span>)}
+            </div>
+            <div style={{ marginTop: 8, display: "flex", gap: 8, fontSize: 12, color: "#aaa090" }}>
+              <span>☀️ {plant.sunlight || "—"}</span>
+              {plant.heightCm && <span>📏 {plant.heightCm[1]}cm</span>}
+            </div>
+          </div>
+        ))}
+        {filtered.length === 0 && (
+          <div style={{ gridColumn: "1 / -1", textAlign: "center", color: "#8a7a5a", padding: 40 }}>
+            📚 Sin fichas que coincidan con tu búsqueda.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function TasksSection({ tasks, plants, gardens, garden, addTask, setSelectedPlantId }) {
   const [filterType, setFilterType] = useState("todos");
   const [newT, setNewT] = useState({ plantId: plants[0]?.id || "", gardenId: garden?.id || "", bedId: "", type: "poda", date: new Date().toISOString().slice(0, 10), note: "" });
@@ -1040,20 +1665,14 @@ function TasksSection({ tasks, plants, gardens, garden, addTask, setSelectedPlan
 // ─────────────────────────────────────────────────────────────
 // CALENDAR SECTION
 // ─────────────────────────────────────────────────────────────
-function CalendarSection({ tasks, plants, garden, setSelectedPlantId }) {
+function CalendarSection({ tasks, plants, garden, setSelectedPlantId, bitacora = [], gardens = [] }) {
   const [viewMonth, setViewMonth] = useState(new Date().getMonth());
   const [showGuru, setShowGuru] = useState(true);
   const monthTasks = tasks.filter(t => parseInt(t.date.slice(5, 7)) - 1 === viewMonth);
+  const monthBitacora = bitacora.filter(b => parseInt(b.date.slice(5, 7)) - 1 === viewMonth).slice().sort((a, b) => b.date.localeCompare(a.date));
   const byPlant = {};
   monthTasks.forEach(t => { if (!byPlant[t.plantId]) byPlant[t.plantId] = []; byPlant[t.plantId].push(t); });
-  const guruCalendar = {
-    0: [{ plant: "Tomate Cherry", action: "Siembra en almácigo en zonas cálidas", source: "Calendario HBA" }],
-    2: [{ plant: "Lavanda", action: "Poda leve post-verano", source: "Calendario HBA" }],
-    8: [{ plant: "Tomate Cherry", action: "Preparar almácigos para siembra primaveral", source: "Calendario HBA" }],
-    9: [{ plant: "Lavanda", action: "Plantar nuevos ejemplares", source: "Calendario HBA" }],
-    10: [{ plant: "Tomate Cherry", action: "Siembra directa en climas cálidos", source: "GardenBA" }],
-  };
-  const guruThisMonth = guruCalendar[viewMonth] || [];
+  const guruThisMonth = GURU_CALENDAR[viewMonth] || [];
   const taskTypes_es = { poda: "✂️", riego: "💧", fertilización: "🌾", siembra: "🌱", trasplante: "🪴", cosecha: "🧺", tratamiento: "💊", observación: "👁", otro: "📝" };
 
   return (
@@ -1107,6 +1726,123 @@ function CalendarSection({ tasks, plants, garden, setSelectedPlantId }) {
             ))
           )}
         </div>
+        <div className="card" style={{ gridColumn: "1 / -1", borderLeft: "4px solid #8ab860" }}>
+          <div className="section-title">📓 Bitácora — {MONTHS[viewMonth]}</div>
+          {monthBitacora.length === 0
+            ? <p style={{ color: "#8a7a5a", fontSize: 14 }}>Sin anotaciones para este mes.</p>
+            : monthBitacora.map(b => {
+              const g = gardens.find(gd => gd.id === b.gardenId);
+              const pl = plants.find(p => p.id === b.plantId);
+              return (
+                <div key={b.id} style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 10, paddingBottom: 10, borderBottom: "1px solid #f0e8d8" }}>
+                  <span style={{ fontSize: 18 }}>{BITACORA_CATEGORY_ICON[b.category] || "📝"}</span>
+                  <div>
+                    <div style={{ fontSize: 13, color: "#4a3a2a" }}>{b.text}</div>
+                    <div style={{ fontSize: 11, color: "#aaa090", marginTop: 2 }}>
+                      {b.date} · {g ? `🌿 ${g.name}` : "🌍 General"}
+                      {pl && <> · <span className="plant-link" onClick={() => setSelectedPlantId(pl.id)}>{pl.emoji} {pl.name}</span></>}
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          }
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// BITÁCORA SECTION
+// ─────────────────────────────────────────────────────────────
+function BitacoraSection({ bitacora, addBitacoraEntry, gardens, plants = [], setSelectedPlantId }) {
+  const [showAdd, setShowAdd] = useState(false);
+  const [newEntry, setNewEntry] = useState({ date: new Date().toISOString().slice(0, 10), category: "observación general", text: "", gardenId: "", plantId: "" });
+  const [filterCat, setFilterCat] = useState("todas");
+
+  const handleAdd = () => {
+    if (!newEntry.text.trim()) return;
+    addBitacoraEntry(newEntry);
+    setNewEntry(e => ({ ...e, text: "", plantId: "" }));
+    setShowAdd(false);
+  };
+
+  const sorted = bitacora.slice().sort((a, b) => b.date.localeCompare(a.date));
+  const filtered = filterCat === "todas" ? sorted : sorted.filter(b => b.category === filterCat);
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+        <div><div className="section-title">Diario del jardín</div><h2 style={{ margin: 0, fontSize: 24, fontWeight: 400 }}>Bitácora</h2></div>
+        <button className="btn-primary" onClick={() => setShowAdd(v => !v)}>＋ Nueva anotación</button>
+      </div>
+
+      {showAdd && (
+        <div className="card" style={{ marginBottom: 20, borderLeft: "4px solid #8ab860" }}>
+          <div className="section-title">Nueva anotación</div>
+          <div className="grid-3" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12 }}>
+            <div><label>Fecha</label><input type="date" value={newEntry.date} onChange={e => setNewEntry(x => ({ ...x, date: e.target.value }))} /></div>
+            <div><label>Categoría</label>
+              <select value={newEntry.category} onChange={e => setNewEntry(x => ({ ...x, category: e.target.value }))}>
+                {BITACORA_CATEGORIES.map(c => <option key={c} value={c}>{BITACORA_CATEGORY_ICON[c]} {c}</option>)}
+              </select>
+            </div>
+            <div><label>Jardín</label>
+              <select value={newEntry.gardenId} onChange={e => setNewEntry(x => ({ ...x, gardenId: e.target.value }))}>
+                <option value="">🌍 General / fuera del jardín</option>
+                {gardens.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+              </select>
+            </div>
+            <div><label>Planta (opcional)</label>
+              <select value={newEntry.plantId} onChange={e => setNewEntry(x => ({ ...x, plantId: e.target.value }))}>
+                <option value="">— Sin planta puntual —</option>
+                {plants.map(p => <option key={p.id} value={p.id}>{p.emoji} {p.name}</option>)}
+              </select>
+            </div>
+            <div style={{ gridColumn: "1 / -1" }}>
+              <label>Observación</label>
+              <textarea rows={3} value={newEntry.text} onChange={e => setNewEntry(x => ({ ...x, text: e.target.value }))} placeholder="Florecieron los ciruelos en el barrio, helada fuerte esta noche, llegaron las primeras golondrinas…" />
+            </div>
+          </div>
+          <div style={{ marginTop: 14, display: "flex", gap: 10 }}>
+            <button className="btn-primary" onClick={handleAdd}>Guardar</button>
+            <button className="btn-secondary" onClick={() => setShowAdd(false)}>Cancelar</button>
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+        {["todas", ...BITACORA_CATEGORIES].map(c => (
+          <button key={c} onClick={() => setFilterCat(c)} className="btn-secondary"
+            style={{ background: filterCat === c ? "#4a7a2a" : undefined, color: filterCat === c ? "#fff" : undefined, borderColor: filterCat === c ? "#4a7a2a" : undefined, fontSize: 12, padding: "5px 12px" }}>
+            {c === "todas" ? "🌿 todas" : `${BITACORA_CATEGORY_ICON[c]} ${c}`}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {filtered.map(b => {
+          const g = gardens.find(gd => gd.id === b.gardenId);
+          const pl = plants.find(p => p.id === b.plantId);
+          return (
+            <div key={b.id} className="card">
+              <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+                <span style={{ fontSize: 22 }}>{BITACORA_CATEGORY_ICON[b.category] || "📝"}</span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <span className="badge" style={{ background: "#e8f0d8", color: "#4a7a2a" }}>{b.category}</span>
+                    <span style={{ fontSize: 12, color: "#aaa090" }}>{b.date}</span>
+                    <span style={{ fontSize: 12, color: "#8a7a5a" }}>{g ? `🌿 ${g.name}` : "🌍 General"}</span>
+                    {pl && <span className="plant-link" onClick={() => setSelectedPlantId(pl.id)} style={{ fontSize: 12 }}>{pl.emoji} {pl.name}</span>}
+                  </div>
+                  <p style={{ margin: "6px 0 0", fontSize: 14, color: "#4a3a2a", lineHeight: 1.6 }}>{b.text}</p>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+        {filtered.length === 0 && <div className="card" style={{ textAlign: "center", color: "#8a7a5a", padding: 40 }}>📓 Sin anotaciones todavía. Empezá a registrar lo que observás.</div>}
       </div>
     </div>
   );
@@ -1115,14 +1851,19 @@ function CalendarSection({ tasks, plants, garden, setSelectedPlantId }) {
 // ─────────────────────────────────────────────────────────────
 // DESIGN SECTION
 // ─────────────────────────────────────────────────────────────
-function DesignSection({ garden, gardens, setGardens, plants, setSelectedPlantId, activeGarden, supabase }) {
+function DesignSection({ garden, gardens, setGardens, plants, encyclopediaPlants = [], promoteToGarden, setSelectedPlantId, activeGarden, supabase, setSaving }) {
   const [selectedBed, setSelectedBed] = useState(null);
   const [showAddBed, setShowAddBed] = useState(false);
   const [newBed, setNewBed] = useState({ name: "", w: 3, h: 2 });
+  const [showEncyclopedia, setShowEncyclopedia] = useState(false);
+  const [addPlantQuery, setAddPlantQuery] = useState("");
 
   const updateGardenBeds = async (newBeds) => {
-    await supabase.from("gardens").update({ beds: newBeds }).eq("id", activeGarden);
-    setGardens(prev => prev.map(g => g.id === activeGarden ? { ...g, beds: newBeds } : g));
+    setSaving(true);
+    try {
+      await supabase.from("gardens").update({ beds: newBeds }).eq("id", activeGarden);
+      setGardens(prev => prev.map(g => g.id === activeGarden ? { ...g, beds: newBeds } : g));
+    } finally { setSaving(false); }
   };
 
   const addBed = async () => {
@@ -1133,7 +1874,8 @@ function DesignSection({ garden, gardens, setGardens, plants, setSelectedPlantId
     setNewBed({ name: "", w: 3, h: 2 });
   };
 
-  const addPlantToBed = async (bedId, plantId) => {
+  const addPlantToBed = async (bedId, plantId, fromEncyclopedia) => {
+    if (fromEncyclopedia) await promoteToGarden(plantId);
     const beds = (garden?.beds || []).map(b => b.id === bedId && !b.plantIds.includes(plantId) ? { ...b, plantIds: [...b.plantIds, plantId] } : b);
     await updateGardenBeds(beds);
   };
@@ -1201,13 +1943,23 @@ function DesignSection({ garden, gardens, setGardens, plants, setSelectedPlantId
                 })}
             </div>
             <div>
-              <div style={{ fontWeight: 600, marginBottom: 10 }}>Agregar planta</div>
-              {plants.filter(p => !(bed.plantIds || []).includes(p.id)).map(p => (
-                <button key={p.id} onClick={() => addPlantToBed(bed.id, p.id)}
-                  style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", background: "none", border: "1px solid #e0d8c8", borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 13, marginBottom: 6, fontFamily: "inherit", textAlign: "left" }}>
-                  <span>{p.emoji}</span><span>{p.name}</span>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                <div style={{ fontWeight: 600 }}>Agregar planta</div>
+                <button className="btn-secondary" onClick={() => setShowEncyclopedia(v => !v)} style={{ fontSize: 11, padding: "4px 10px", background: showEncyclopedia ? "#5a4a8a" : undefined, color: showEncyclopedia ? "#fff" : undefined, borderColor: showEncyclopedia ? "#5a4a8a" : undefined }}>
+                  📚 {showEncyclopedia ? "Ocultar enciclopedia" : "Incluir enciclopedia"}
                 </button>
-              ))}
+              </div>
+              <input type="text" value={addPlantQuery} onChange={e => setAddPlantQuery(e.target.value)} placeholder="Buscar planta…" style={{ marginBottom: 10 }} />
+              {[...plants, ...(showEncyclopedia ? encyclopediaPlants : [])]
+                .filter(p => !(bed.plantIds || []).includes(p.id))
+                .filter(p => !addPlantQuery || p.name.toLowerCase().includes(addPlantQuery.toLowerCase()))
+                .map(p => (
+                  <button key={p.id} onClick={() => addPlantToBed(bed.id, p.id, !p.inGarden)}
+                    style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", background: "none", border: "1px solid #e0d8c8", borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 13, marginBottom: 6, fontFamily: "inherit", textAlign: "left" }}>
+                    <span>{p.emoji}</span><span style={{ flex: 1 }}>{p.name}</span>
+                    {!p.inGarden && <span className="badge" style={{ background: "#e8e0f5", color: "#5a4a8a", fontSize: 10 }}>📚</span>}
+                  </button>
+                ))}
             </div>
           </div>
         </div>
@@ -1219,21 +1971,29 @@ function DesignSection({ garden, gardens, setGardens, plants, setSelectedPlantId
 // ─────────────────────────────────────────────────────────────
 // PESTS SECTION
 // ─────────────────────────────────────────────────────────────
-function PestsSection({ pests, setPests, plants, garden, setSelectedPlantId, supabase }) {
+function PestsSection({ pests, setPests, plants, garden, setSelectedPlantId, supabase, addPest, setSaving, autoOpenAdd, setAutoOpenAdd }) {
   const [showAdd, setShowAdd] = useState(false);
   const [newPest, setNewPest] = useState({ plantId: plants[0]?.id || "", name: "", date: new Date().toISOString().slice(0, 10), treatment: "", resolved: false });
 
-  const addPest = async () => {
+  useEffect(() => {
+    if (autoOpenAdd) {
+      setShowAdd(true);
+      setAutoOpenAdd(false);
+    }
+  }, [autoOpenAdd, setAutoOpenAdd]);
+
+  const handleAddPest = async () => {
     if (!newPest.name.trim()) return;
-    const pest = { id: "pe" + Date.now(), plant_id: newPest.plantId, name: newPest.name, date: newPest.date, treatment: newPest.treatment, resolved: newPest.resolved };
-    await supabase.from("pests").insert(pest);
-    setPests(prev => [...prev, { id: pest.id, plantId: pest.plant_id, name: pest.name, date: pest.date, treatment: pest.treatment, resolved: pest.resolved }]);
+    await addPest(newPest);
     setShowAdd(false);
   };
 
   const markResolved = async (id) => {
-    await supabase.from("pests").update({ resolved: true }).eq("id", id);
-    setPests(prev => prev.map(p => p.id === id ? { ...p, resolved: true } : p));
+    setSaving(true);
+    try {
+      await supabase.from("pests").update({ resolved: true }).eq("id", id);
+      setPests(prev => prev.map(p => p.id === id ? { ...p, resolved: true } : p));
+    } finally { setSaving(false); }
   };
 
   return (
@@ -1256,7 +2016,7 @@ function PestsSection({ pests, setPests, plants, garden, setSelectedPlantId, sup
             <div style={{ gridColumn: "1 / -1" }}><label>Tratamiento</label><textarea value={newPest.treatment} rows={2} onChange={e => setNewPest(p => ({ ...p, treatment: e.target.value }))} /></div>
           </div>
           <div style={{ marginTop: 12, display: "flex", gap: 10 }}>
-            <button className="btn-primary" onClick={addPest}>Guardar</button>
+            <button className="btn-primary" onClick={handleAddPest}>Guardar</button>
             <button className="btn-secondary" onClick={() => setShowAdd(false)}>Cancelar</button>
           </div>
         </div>
