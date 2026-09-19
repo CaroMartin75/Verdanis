@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
 
 const SUPABASE_URL = "https://zhmlpojlrxarqvnllfug.supabase.co";
@@ -77,7 +77,8 @@ function dbToPlant(p) {
     tags: p.tags || [], plantOfDay: p.plant_of_day,
     communityNotes: p.community_notes || [], images: [],
     inGarden: p.in_garden !== false,
-    status: p.status || "en tierra"
+    status: p.status || "en tierra",
+    aiSuggestedFields: p.ai_suggested_fields || []
   };
 }
 
@@ -99,7 +100,8 @@ function plantToDb(p) {
     tags: p.tags, plant_of_day: p.plantOfDay,
     community_notes: p.communityNotes,
     in_garden: p.inGarden !== false,
-    status: p.status || "en tierra"
+    status: p.status || "en tierra",
+    ai_suggested_fields: p.aiSuggestedFields || []
   };
 }
 
@@ -1001,6 +1003,75 @@ function InfoRow({ icon, label, value }) {
 // ─────────────────────────────────────────────────────────────
 // PLANTS SECTION
 // ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// Sugerencias de IA para el formulario de nueva planta
+// ─────────────────────────────────────────────────────────────
+function useAiPlantSuggestions(newPlant, setNewPlant, newFloweringSeason, setNewFloweringSeason) {
+  const [fieldSource, setFieldSource] = useState({}); // { fieldKey: "ai" | "user" }
+  const [aiLoading, setAiLoading] = useState(false);
+  const lastFetchedName = useRef("");
+
+  const markUserEdited = (key) => {
+    setFieldSource(prev => (prev[key] ? { ...prev, [key]: "user" } : prev));
+  };
+
+  const resetAiState = () => {
+    setFieldSource({});
+    lastFetchedName.current = "";
+  };
+
+  const fetchSuggestions = async () => {
+    const name = newPlant.name.trim();
+    if (!name || aiLoading || name === lastFetchedName.current) return;
+    lastFetchedName.current = name;
+    setAiLoading(true);
+    try {
+      const res = await fetch("/api/suggest-plant", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      if (!res.ok) return;
+      const s = await res.json();
+      const next = { ...newPlant };
+      const applied = [];
+      const maybeSet = (key, value) => {
+        if (value !== undefined && value !== null && value !== "" && !next[key]) {
+          next[key] = value;
+          applied.push(key);
+        }
+      };
+      maybeSet("description", s.description);
+      maybeSet("sunlight", s.sunlight);
+      if (!newPlant.waterDays && s.waterDays) { next.waterDays = s.waterDays; applied.push("waterDays"); }
+      if (!newPlant.heightCm[0] && !newPlant.heightCm[1] && s.heightMin && s.heightMax) { next.heightCm = [s.heightMin, s.heightMax]; applied.push("heightCm"); }
+      if (!newPlant.diameterCm[0] && !newPlant.diameterCm[1] && s.diameterMin && s.diameterMax) { next.diameterCm = [s.diameterMin, s.diameterMax]; applied.push("diameterCm"); }
+      maybeSet("leafShape", s.leafShape);
+      maybeSet("habit", s.habit);
+      maybeSet("flowerColor", s.flowerColor);
+      maybeSet("foliageColor", s.foliageColor);
+      setNewPlant(next);
+      if (s.floweringSeason && s.floweringSeason.length && !newFloweringSeason.trim()) {
+        setNewFloweringSeason(s.floweringSeason.join(", "));
+        applied.push("floweringSeason");
+      }
+      if (applied.length) {
+        setFieldSource(prev => {
+          const merged = { ...prev };
+          applied.forEach(k => { merged[k] = "ai"; });
+          return merged;
+        });
+      }
+    } catch (e) {
+      console.error("Error obteniendo sugerencias de IA", e);
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  return { fieldSource, aiLoading, markUserEdited, fetchSuggestions, resetAiState };
+}
+
 function PlantsSection({ plants, setPlants, setSelectedPlantId, garden, searchQ, setSearchQ, getPlantContext, supabase, plantToDb, setSaving, autoOpenAdd, setAutoOpenAdd }) {
   const [showAdd, setShowAdd] = useState(false);
 
@@ -1020,6 +1091,7 @@ function PlantsSection({ plants, setPlants, setSelectedPlantId, garden, searchQ,
   const [filterLC, setFilterLC] = useState("todos");
   const [filterSun, setFilterSun] = useState("todos");
   const [filterStatus, setFilterStatus] = useState("todos");
+  const { fieldSource: aiFieldSource, aiLoading, markUserEdited, fetchSuggestions: fetchAiSuggestions, resetAiState } = useAiPlantSuggestions(newPlant, setNewPlant, newFloweringSeason, setNewFloweringSeason);
 
   const filtered = plants.filter(p => {
     const q = searchQ.toLowerCase();
@@ -1067,21 +1139,24 @@ function PlantsSection({ plants, setPlants, setSelectedPlantId, garden, searchQ,
       sowing_season: plant.sowingSeason,
       transplant_season: plant.transplantSeason,
       tags: plant.tags, role: plant.role,
-      plant_of_day: false, community_notes: [], in_garden: true, status: plant.status
+      plant_of_day: false, community_notes: [], in_garden: true, status: plant.status,
+      ai_suggested_fields: Object.keys(aiFieldSource).filter(k => aiFieldSource[k] === "ai")
     };
     setSaving(true);
     try {
       await supabase.from("plants").insert(dbPlant);
-      setPlants(prev => [...prev, plant]);
+      setPlants(prev => [...prev, { ...plant, aiSuggestedFields: dbPlant.ai_suggested_fields }]);
       setShowAdd(false);
       setNewPlant(emptyPlant);
       setNewFloweringSeason(""); setNewSowingSeason(""); setNewTransplantSeason("");
       setNewTags(""); setNewRole("");
+      resetAiState();
     } finally { setSaving(false); }
   };
 
   const inp = { width: "100%", background: "#faf8f3", border: "1px solid #ddd4c0", borderRadius: 8, padding: "9px 12px", fontSize: 14, color: "#2c2416", outline: "none", fontFamily: "inherit" };
-  const Lbl = ({ children }) => <div style={{ fontSize: 11, letterSpacing: 1, textTransform: "uppercase", color: "#8a7a5a", marginBottom: 5 }}>{children}</div>;
+  const AiIcon = ({ field }) => aiFieldSource[field] ? <span title={aiFieldSource[field] === "ai" ? "Sugerido por IA" : "Editado por vos"} style={{ marginLeft: 4 }}>{aiFieldSource[field] === "ai" ? "🤖" : "👤"}</span> : null;
+  const Lbl = ({ children, field }) => <div style={{ fontSize: 11, letterSpacing: 1, textTransform: "uppercase", color: "#8a7a5a", marginBottom: 5, display: "flex", alignItems: "center" }}>{children}{field && <AiIcon field={field} />}</div>;
 
   return (
     <div>
@@ -1127,7 +1202,11 @@ function PlantsSection({ plants, setPlants, setSelectedPlantId, garden, searchQ,
           <div className="section-title">Nueva planta</div>
 
           <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
-            <div><Lbl>Nombre</Lbl><input style={inp} value={newPlant.name} onChange={e => setNewPlant(p => ({ ...p, name: e.target.value }))} placeholder="Magnolia Soulangeana, Lavanda..." /></div>
+            <div>
+              <Lbl>Nombre</Lbl>
+              <input style={inp} value={newPlant.name} onChange={e => setNewPlant(p => ({ ...p, name: e.target.value }))} onBlur={fetchAiSuggestions} placeholder="Magnolia Soulangeana, Lavanda..." />
+              {aiLoading && <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, fontSize: 12, color: "#8a7a5a" }}><span className="spinner" style={{ borderColor: "rgba(74,122,42,0.25)", borderTopColor: "#4a7a2a" }} />🤖 Buscando sugerencias...</div>}
+            </div>
             <div><Lbl>Emoji</Lbl><input style={inp} value={newPlant.emoji} onChange={e => setNewPlant(p => ({ ...p, emoji: e.target.value }))} /></div>
             <div><Lbl>Familia botánica</Lbl><input style={inp} value={newPlant.family} onChange={e => setNewPlant(p => ({ ...p, family: e.target.value }))} placeholder="Magnoliaceae..." /></div>
           </div>
@@ -1141,8 +1220,8 @@ function PlantsSection({ plants, setPlants, setSelectedPlantId, garden, searchQ,
           </div>
 
           <div style={{ marginBottom: 12 }}>
-            <Lbl>Descripción general</Lbl>
-            <textarea style={{ ...inp, resize: "vertical" }} rows={2} value={newPlant.description} onChange={e => setNewPlant(p => ({ ...p, description: e.target.value }))} placeholder="Características principales, origen, usos..." />
+            <Lbl field="description">Descripción general</Lbl>
+            <textarea style={{ ...inp, resize: "vertical" }} rows={2} value={newPlant.description} onChange={e => { setNewPlant(p => ({ ...p, description: e.target.value })); markUserEdited("description"); }} placeholder="Características principales, origen, usos..." />
           </div>
 
           <div style={{ marginBottom: 12 }}>
@@ -1159,65 +1238,65 @@ function PlantsSection({ plants, setPlants, setSelectedPlantId, garden, searchQ,
                 <option value="perenne">🌳 Perenne</option>
               </select>
             </div>
-            <div><Lbl>☀️ Luz solar</Lbl>
-              <select style={inp} value={newPlant.sunlight} onChange={e => setNewPlant(p => ({ ...p, sunlight: e.target.value }))}>
+            <div><Lbl field="sunlight">☀️ Luz solar</Lbl>
+              <select style={inp} value={newPlant.sunlight} onChange={e => { setNewPlant(p => ({ ...p, sunlight: e.target.value })); markUserEdited("sunlight"); }}>
                 <option value="">— Elegir —</option>
                 {["pleno sol", "semisombra", "sombra", "luz indirecta"].map(o => <option key={o} value={o}>{o}</option>)}
               </select>
             </div>
-            <div><Lbl>💧 Días entre riego</Lbl>
-              <input style={inp} type="number" min="1" value={newPlant.waterDays} onChange={e => setNewPlant(p => ({ ...p, waterDays: e.target.value === "" ? "" : Number(e.target.value) }))} />
+            <div><Lbl field="waterDays">💧 Días entre riego</Lbl>
+              <input style={inp} type="number" min="1" value={newPlant.waterDays} onChange={e => { setNewPlant(p => ({ ...p, waterDays: e.target.value === "" ? "" : Number(e.target.value) })); markUserEdited("waterDays"); }} />
             </div>
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
-            <div><Lbl>🍁 Forma de hoja</Lbl>
-              <select style={inp} value={newPlant.leafShape} onChange={e => setNewPlant(p => ({ ...p, leafShape: e.target.value }))}>
+            <div><Lbl field="leafShape">🍁 Forma de hoja</Lbl>
+              <select style={inp} value={newPlant.leafShape} onChange={e => { setNewPlant(p => ({ ...p, leafShape: e.target.value })); markUserEdited("leafShape"); }}>
                 <option value="">— Sin especificar —</option>
                 {LEAF_SHAPES.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
-            <div><Lbl>🌳 Porte</Lbl>
-              <select style={inp} value={newPlant.habit} onChange={e => setNewPlant(p => ({ ...p, habit: e.target.value }))}>
+            <div><Lbl field="habit">🌳 Porte</Lbl>
+              <select style={inp} value={newPlant.habit} onChange={e => { setNewPlant(p => ({ ...p, habit: e.target.value })); markUserEdited("habit"); }}>
                 <option value="">— Sin especificar —</option>
                 {PLANT_HABITS.map(h => <option key={h} value={h}>{h}</option>)}
               </select>
             </div>
-            <div><Lbl>🍃 Color de follaje</Lbl>
+            <div><Lbl field="foliageColor">🍃 Color de follaje</Lbl>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <input type="color" value={newPlant.foliageColor || "#4a7a2a"} onChange={e => setNewPlant(p => ({ ...p, foliageColor: e.target.value }))} style={{ width: 46, height: 40, border: "1px solid #ddd4c0", borderRadius: 8, cursor: "pointer", padding: 2 }} />
-                <input style={{ ...inp, flex: 1 }} value={newPlant.foliageColor} onChange={e => setNewPlant(p => ({ ...p, foliageColor: e.target.value }))} placeholder="#4a7a2a" />
+                <input type="color" value={newPlant.foliageColor || "#4a7a2a"} onChange={e => { setNewPlant(p => ({ ...p, foliageColor: e.target.value })); markUserEdited("foliageColor"); }} style={{ width: 46, height: 40, border: "1px solid #ddd4c0", borderRadius: 8, cursor: "pointer", padding: 2 }} />
+                <input style={{ ...inp, flex: 1 }} value={newPlant.foliageColor} onChange={e => { setNewPlant(p => ({ ...p, foliageColor: e.target.value })); markUserEdited("foliageColor"); }} placeholder="#4a7a2a" />
               </div>
             </div>
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
             <div>
-              <Lbl>📏 Altura final (cm) — mínima / máxima</Lbl>
+              <Lbl field="heightCm">📏 Altura final (cm) — mínima / máxima</Lbl>
               <div style={{ display: "flex", gap: 8 }}>
-                <input style={inp} type="number" placeholder="Mín" value={newPlant.heightCm[0]} onChange={e => setNewPlant(p => ({ ...p, heightCm: [e.target.value === "" ? "" : Number(e.target.value), p.heightCm[1]] }))} />
-                <input style={inp} type="number" placeholder="Máx" value={newPlant.heightCm[1]} onChange={e => setNewPlant(p => ({ ...p, heightCm: [p.heightCm[0], e.target.value === "" ? "" : Number(e.target.value)] }))} />
+                <input style={inp} type="number" placeholder="Mín" value={newPlant.heightCm[0]} onChange={e => { setNewPlant(p => ({ ...p, heightCm: [e.target.value === "" ? "" : Number(e.target.value), p.heightCm[1]] })); markUserEdited("heightCm"); }} />
+                <input style={inp} type="number" placeholder="Máx" value={newPlant.heightCm[1]} onChange={e => { setNewPlant(p => ({ ...p, heightCm: [p.heightCm[0], e.target.value === "" ? "" : Number(e.target.value)] })); markUserEdited("heightCm"); }} />
               </div>
             </div>
             <div>
-              <Lbl>⭕ Diámetro final (cm) — mínimo / máximo</Lbl>
+              <Lbl field="diameterCm">⭕ Diámetro final (cm) — mínimo / máximo</Lbl>
               <div style={{ display: "flex", gap: 8 }}>
-                <input style={inp} type="number" placeholder="Mín" value={newPlant.diameterCm[0]} onChange={e => setNewPlant(p => ({ ...p, diameterCm: [e.target.value === "" ? "" : Number(e.target.value), p.diameterCm[1]] }))} />
-                <input style={inp} type="number" placeholder="Máx" value={newPlant.diameterCm[1]} onChange={e => setNewPlant(p => ({ ...p, diameterCm: [p.diameterCm[0], e.target.value === "" ? "" : Number(e.target.value)] }))} />
+                <input style={inp} type="number" placeholder="Mín" value={newPlant.diameterCm[0]} onChange={e => { setNewPlant(p => ({ ...p, diameterCm: [e.target.value === "" ? "" : Number(e.target.value), p.diameterCm[1]] })); markUserEdited("diameterCm"); }} />
+                <input style={inp} type="number" placeholder="Máx" value={newPlant.diameterCm[1]} onChange={e => { setNewPlant(p => ({ ...p, diameterCm: [p.diameterCm[0], e.target.value === "" ? "" : Number(e.target.value)] })); markUserEdited("diameterCm"); }} />
               </div>
             </div>
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
             <div>
-              <Lbl>🌸 Época de floración (separadas por coma)</Lbl>
-              <input style={inp} value={newFloweringSeason} onChange={e => setNewFloweringSeason(e.target.value)} placeholder="Agosto, Septiembre, Primavera..." />
+              <Lbl field="floweringSeason">🌸 Época de floración (separadas por coma)</Lbl>
+              <input style={inp} value={newFloweringSeason} onChange={e => { setNewFloweringSeason(e.target.value); markUserEdited("floweringSeason"); }} placeholder="Agosto, Septiembre, Primavera..." />
             </div>
             <div>
-              <Lbl>🎨 Color de flor</Lbl>
+              <Lbl field="flowerColor">🎨 Color de flor</Lbl>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <input type="color" value={newPlant.flowerColor} onChange={e => setNewPlant(p => ({ ...p, flowerColor: e.target.value }))} style={{ width: 46, height: 40, border: "1px solid #ddd4c0", borderRadius: 8, cursor: "pointer", padding: 2 }} />
-                <input style={{ ...inp, flex: 1 }} value={newPlant.flowerColor} onChange={e => setNewPlant(p => ({ ...p, flowerColor: e.target.value }))} />
+                <input type="color" value={newPlant.flowerColor} onChange={e => { setNewPlant(p => ({ ...p, flowerColor: e.target.value })); markUserEdited("flowerColor"); }} style={{ width: 46, height: 40, border: "1px solid #ddd4c0", borderRadius: 8, cursor: "pointer", padding: 2 }} />
+                <input style={{ ...inp, flex: 1 }} value={newPlant.flowerColor} onChange={e => { setNewPlant(p => ({ ...p, flowerColor: e.target.value })); markUserEdited("flowerColor"); }} />
               </div>
             </div>
           </div>
@@ -1245,7 +1324,7 @@ function PlantsSection({ plants, setPlants, setSelectedPlantId, garden, searchQ,
 
           <div style={{ display: "flex", gap: 10 }}>
             <button className="btn-primary" onClick={addPlant}>＋ Agregar planta</button>
-            <button className="btn-secondary" onClick={() => setShowAdd(false)}>Cancelar</button>
+            <button className="btn-secondary" onClick={() => { setShowAdd(false); resetAiState(); }}>Cancelar</button>
           </div>
         </div>
       )}
@@ -1317,6 +1396,7 @@ function EncyclopediaSection({ plants, setPlants, setSelectedPlantId, supabase, 
   const [filterLC, setFilterLC] = useState("todos");
   const [filterSun, setFilterSun] = useState("todos");
   const [filterStatus, setFilterStatus] = useState("todos");
+  const { fieldSource: aiFieldSource, aiLoading, markUserEdited, fetchSuggestions: fetchAiSuggestions, resetAiState } = useAiPlantSuggestions(newPlant, setNewPlant, newFloweringSeason, setNewFloweringSeason);
 
   const filtered = plants.filter(p => {
     const q = searchQ.toLowerCase();
@@ -1364,21 +1444,24 @@ function EncyclopediaSection({ plants, setPlants, setSelectedPlantId, supabase, 
       sowing_season: plant.sowingSeason,
       transplant_season: plant.transplantSeason,
       tags: plant.tags, role: plant.role,
-      plant_of_day: false, community_notes: [], in_garden: false, status: plant.status
+      plant_of_day: false, community_notes: [], in_garden: false, status: plant.status,
+      ai_suggested_fields: Object.keys(aiFieldSource).filter(k => aiFieldSource[k] === "ai")
     };
     setSaving(true);
     try {
       await supabase.from("plants").insert(dbPlant);
-      setPlants(prev => [...prev, plant]);
+      setPlants(prev => [...prev, { ...plant, aiSuggestedFields: dbPlant.ai_suggested_fields }]);
       setShowAdd(false);
       setNewPlant(emptyPlant);
       setNewFloweringSeason(""); setNewSowingSeason(""); setNewTransplantSeason("");
       setNewTags(""); setNewRole("");
+      resetAiState();
     } finally { setSaving(false); }
   };
 
   const inp = { width: "100%", background: "#faf8f3", border: "1px solid #ddd4c0", borderRadius: 8, padding: "9px 12px", fontSize: 14, color: "#2c2416", outline: "none", fontFamily: "inherit" };
-  const Lbl = ({ children }) => <div style={{ fontSize: 11, letterSpacing: 1, textTransform: "uppercase", color: "#8a7a5a", marginBottom: 5 }}>{children}</div>;
+  const AiIcon = ({ field }) => aiFieldSource[field] ? <span title={aiFieldSource[field] === "ai" ? "Sugerido por IA" : "Editado por vos"} style={{ marginLeft: 4 }}>{aiFieldSource[field] === "ai" ? "🤖" : "👤"}</span> : null;
+  const Lbl = ({ children, field }) => <div style={{ fontSize: 11, letterSpacing: 1, textTransform: "uppercase", color: "#8a7a5a", marginBottom: 5, display: "flex", alignItems: "center" }}>{children}{field && <AiIcon field={field} />}</div>;
 
   return (
     <div>
@@ -1423,7 +1506,11 @@ function EncyclopediaSection({ plants, setPlants, setSelectedPlantId, supabase, 
           <div className="section-title">Nueva ficha de enciclopedia</div>
 
           <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
-            <div><Lbl>Nombre</Lbl><input style={inp} value={newPlant.name} onChange={e => setNewPlant(p => ({ ...p, name: e.target.value }))} placeholder="Magnolia Soulangeana, Salvia..." /></div>
+            <div>
+              <Lbl>Nombre</Lbl>
+              <input style={inp} value={newPlant.name} onChange={e => setNewPlant(p => ({ ...p, name: e.target.value }))} onBlur={fetchAiSuggestions} placeholder="Magnolia Soulangeana, Salvia..." />
+              {aiLoading && <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, fontSize: 12, color: "#8a7a5a" }}><span className="spinner" style={{ borderColor: "rgba(90,74,138,0.25)", borderTopColor: "#5a4a8a" }} />🤖 Buscando sugerencias...</div>}
+            </div>
             <div><Lbl>Emoji</Lbl><input style={inp} value={newPlant.emoji} onChange={e => setNewPlant(p => ({ ...p, emoji: e.target.value }))} /></div>
             <div><Lbl>Familia botánica</Lbl><input style={inp} value={newPlant.family} onChange={e => setNewPlant(p => ({ ...p, family: e.target.value }))} placeholder="Magnoliaceae..." /></div>
           </div>
@@ -1437,8 +1524,8 @@ function EncyclopediaSection({ plants, setPlants, setSelectedPlantId, supabase, 
           </div>
 
           <div style={{ marginBottom: 12 }}>
-            <Lbl>Descripción general</Lbl>
-            <textarea style={{ ...inp, resize: "vertical" }} rows={2} value={newPlant.description} onChange={e => setNewPlant(p => ({ ...p, description: e.target.value }))} placeholder="Características principales, origen, usos..." />
+            <Lbl field="description">Descripción general</Lbl>
+            <textarea style={{ ...inp, resize: "vertical" }} rows={2} value={newPlant.description} onChange={e => { setNewPlant(p => ({ ...p, description: e.target.value })); markUserEdited("description"); }} placeholder="Características principales, origen, usos..." />
           </div>
 
           <div style={{ marginBottom: 12 }}>
@@ -1455,65 +1542,65 @@ function EncyclopediaSection({ plants, setPlants, setSelectedPlantId, supabase, 
                 <option value="perenne">🌳 Perenne</option>
               </select>
             </div>
-            <div><Lbl>☀️ Luz solar</Lbl>
-              <select style={inp} value={newPlant.sunlight} onChange={e => setNewPlant(p => ({ ...p, sunlight: e.target.value }))}>
+            <div><Lbl field="sunlight">☀️ Luz solar</Lbl>
+              <select style={inp} value={newPlant.sunlight} onChange={e => { setNewPlant(p => ({ ...p, sunlight: e.target.value })); markUserEdited("sunlight"); }}>
                 <option value="">— Elegir —</option>
                 {["pleno sol", "semisombra", "sombra", "luz indirecta"].map(o => <option key={o} value={o}>{o}</option>)}
               </select>
             </div>
-            <div><Lbl>💧 Días entre riego</Lbl>
-              <input style={inp} type="number" min="1" value={newPlant.waterDays} onChange={e => setNewPlant(p => ({ ...p, waterDays: e.target.value === "" ? "" : Number(e.target.value) }))} />
+            <div><Lbl field="waterDays">💧 Días entre riego</Lbl>
+              <input style={inp} type="number" min="1" value={newPlant.waterDays} onChange={e => { setNewPlant(p => ({ ...p, waterDays: e.target.value === "" ? "" : Number(e.target.value) })); markUserEdited("waterDays"); }} />
             </div>
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
-            <div><Lbl>🍁 Forma de hoja</Lbl>
-              <select style={inp} value={newPlant.leafShape} onChange={e => setNewPlant(p => ({ ...p, leafShape: e.target.value }))}>
+            <div><Lbl field="leafShape">🍁 Forma de hoja</Lbl>
+              <select style={inp} value={newPlant.leafShape} onChange={e => { setNewPlant(p => ({ ...p, leafShape: e.target.value })); markUserEdited("leafShape"); }}>
                 <option value="">— Sin especificar —</option>
                 {LEAF_SHAPES.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
-            <div><Lbl>🌳 Porte</Lbl>
-              <select style={inp} value={newPlant.habit} onChange={e => setNewPlant(p => ({ ...p, habit: e.target.value }))}>
+            <div><Lbl field="habit">🌳 Porte</Lbl>
+              <select style={inp} value={newPlant.habit} onChange={e => { setNewPlant(p => ({ ...p, habit: e.target.value })); markUserEdited("habit"); }}>
                 <option value="">— Sin especificar —</option>
                 {PLANT_HABITS.map(h => <option key={h} value={h}>{h}</option>)}
               </select>
             </div>
-            <div><Lbl>🍃 Color de follaje</Lbl>
+            <div><Lbl field="foliageColor">🍃 Color de follaje</Lbl>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <input type="color" value={newPlant.foliageColor || "#4a7a2a"} onChange={e => setNewPlant(p => ({ ...p, foliageColor: e.target.value }))} style={{ width: 46, height: 40, border: "1px solid #ddd4c0", borderRadius: 8, cursor: "pointer", padding: 2 }} />
-                <input style={{ ...inp, flex: 1 }} value={newPlant.foliageColor} onChange={e => setNewPlant(p => ({ ...p, foliageColor: e.target.value }))} placeholder="#4a7a2a" />
+                <input type="color" value={newPlant.foliageColor || "#4a7a2a"} onChange={e => { setNewPlant(p => ({ ...p, foliageColor: e.target.value })); markUserEdited("foliageColor"); }} style={{ width: 46, height: 40, border: "1px solid #ddd4c0", borderRadius: 8, cursor: "pointer", padding: 2 }} />
+                <input style={{ ...inp, flex: 1 }} value={newPlant.foliageColor} onChange={e => { setNewPlant(p => ({ ...p, foliageColor: e.target.value })); markUserEdited("foliageColor"); }} placeholder="#4a7a2a" />
               </div>
             </div>
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
             <div>
-              <Lbl>📏 Altura final (cm) — mínima / máxima</Lbl>
+              <Lbl field="heightCm">📏 Altura final (cm) — mínima / máxima</Lbl>
               <div style={{ display: "flex", gap: 8 }}>
-                <input style={inp} type="number" placeholder="Mín" value={newPlant.heightCm[0]} onChange={e => setNewPlant(p => ({ ...p, heightCm: [e.target.value === "" ? "" : Number(e.target.value), p.heightCm[1]] }))} />
-                <input style={inp} type="number" placeholder="Máx" value={newPlant.heightCm[1]} onChange={e => setNewPlant(p => ({ ...p, heightCm: [p.heightCm[0], e.target.value === "" ? "" : Number(e.target.value)] }))} />
+                <input style={inp} type="number" placeholder="Mín" value={newPlant.heightCm[0]} onChange={e => { setNewPlant(p => ({ ...p, heightCm: [e.target.value === "" ? "" : Number(e.target.value), p.heightCm[1]] })); markUserEdited("heightCm"); }} />
+                <input style={inp} type="number" placeholder="Máx" value={newPlant.heightCm[1]} onChange={e => { setNewPlant(p => ({ ...p, heightCm: [p.heightCm[0], e.target.value === "" ? "" : Number(e.target.value)] })); markUserEdited("heightCm"); }} />
               </div>
             </div>
             <div>
-              <Lbl>⭕ Diámetro final (cm) — mínimo / máximo</Lbl>
+              <Lbl field="diameterCm">⭕ Diámetro final (cm) — mínimo / máximo</Lbl>
               <div style={{ display: "flex", gap: 8 }}>
-                <input style={inp} type="number" placeholder="Mín" value={newPlant.diameterCm[0]} onChange={e => setNewPlant(p => ({ ...p, diameterCm: [e.target.value === "" ? "" : Number(e.target.value), p.diameterCm[1]] }))} />
-                <input style={inp} type="number" placeholder="Máx" value={newPlant.diameterCm[1]} onChange={e => setNewPlant(p => ({ ...p, diameterCm: [p.diameterCm[0], e.target.value === "" ? "" : Number(e.target.value)] }))} />
+                <input style={inp} type="number" placeholder="Mín" value={newPlant.diameterCm[0]} onChange={e => { setNewPlant(p => ({ ...p, diameterCm: [e.target.value === "" ? "" : Number(e.target.value), p.diameterCm[1]] })); markUserEdited("diameterCm"); }} />
+                <input style={inp} type="number" placeholder="Máx" value={newPlant.diameterCm[1]} onChange={e => { setNewPlant(p => ({ ...p, diameterCm: [p.diameterCm[0], e.target.value === "" ? "" : Number(e.target.value)] })); markUserEdited("diameterCm"); }} />
               </div>
             </div>
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
             <div>
-              <Lbl>🌸 Época de floración (separadas por coma)</Lbl>
-              <input style={inp} value={newFloweringSeason} onChange={e => setNewFloweringSeason(e.target.value)} placeholder="Agosto, Septiembre, Primavera..." />
+              <Lbl field="floweringSeason">🌸 Época de floración (separadas por coma)</Lbl>
+              <input style={inp} value={newFloweringSeason} onChange={e => { setNewFloweringSeason(e.target.value); markUserEdited("floweringSeason"); }} placeholder="Agosto, Septiembre, Primavera..." />
             </div>
             <div>
-              <Lbl>🎨 Color de flor</Lbl>
+              <Lbl field="flowerColor">🎨 Color de flor</Lbl>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <input type="color" value={newPlant.flowerColor} onChange={e => setNewPlant(p => ({ ...p, flowerColor: e.target.value }))} style={{ width: 46, height: 40, border: "1px solid #ddd4c0", borderRadius: 8, cursor: "pointer", padding: 2 }} />
-                <input style={{ ...inp, flex: 1 }} value={newPlant.flowerColor} onChange={e => setNewPlant(p => ({ ...p, flowerColor: e.target.value }))} />
+                <input type="color" value={newPlant.flowerColor} onChange={e => { setNewPlant(p => ({ ...p, flowerColor: e.target.value })); markUserEdited("flowerColor"); }} style={{ width: 46, height: 40, border: "1px solid #ddd4c0", borderRadius: 8, cursor: "pointer", padding: 2 }} />
+                <input style={{ ...inp, flex: 1 }} value={newPlant.flowerColor} onChange={e => { setNewPlant(p => ({ ...p, flowerColor: e.target.value })); markUserEdited("flowerColor"); }} />
               </div>
             </div>
           </div>
@@ -1541,7 +1628,7 @@ function EncyclopediaSection({ plants, setPlants, setSelectedPlantId, supabase, 
 
           <div style={{ display: "flex", gap: 10 }}>
             <button className="btn-primary" onClick={addPlant}>＋ Agregar ficha</button>
-            <button className="btn-secondary" onClick={() => setShowAdd(false)}>Cancelar</button>
+            <button className="btn-secondary" onClick={() => { setShowAdd(false); resetAiState(); }}>Cancelar</button>
           </div>
         </div>
       )}
