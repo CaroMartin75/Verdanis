@@ -43,6 +43,8 @@ const PLANT_STATUSES = ["en tierra", "en maceta", "en espera de plantar", "desea
 const PLANT_STATUS_ICON = { "en tierra": "🌱", "en maceta": "🪴", "en espera de plantar": "⏳", "deseada": "💭" };
 const LEAF_SHAPES = ["acintada", "lobulada", "redondeada", "compuesta", "acicular", "lanceolada"];
 const PLANT_HABITS = ["columnar", "esférico", "rastrero", "trepador", "arbustivo", "arborescente"];
+const GARDEN_STYLES = ["formal", "naturalista", "pradera/pastizal", "mediterráneo", "huerta", "mixto", "otro"];
+const GARDEN_STYLE_ICON = { formal: "🏛️", naturalista: "🌿", "pradera/pastizal": "🌾", mediterráneo: "🫒", huerta: "🥕", mixto: "🎨", otro: "📝" };
 const GURU_CALENDAR = {
   0: [{ plant: "Tomate Cherry", action: "Siembra en almácigo en zonas cálidas", source: "Calendario HBA" }],
   2: [{ plant: "Lavanda", action: "Poda leve post-verano", source: "Calendario HBA" }],
@@ -78,7 +80,8 @@ function dbToPlant(p) {
     communityNotes: p.community_notes || [], images: [],
     inGarden: p.in_garden !== false,
     status: p.status || "en tierra",
-    aiSuggestedFields: p.ai_suggested_fields || []
+    aiSuggestedFields: p.ai_suggested_fields || [],
+    substrate: p.substrate || ""
   };
 }
 
@@ -101,7 +104,8 @@ function plantToDb(p) {
     community_notes: p.communityNotes,
     in_garden: p.inGarden !== false,
     status: p.status || "en tierra",
-    ai_suggested_fields: p.aiSuggestedFields || []
+    ai_suggested_fields: p.aiSuggestedFields || [],
+    substrate: p.substrate || ""
   };
 }
 
@@ -137,6 +141,7 @@ export default function JardinApp() {
   const [isPublicView, setIsPublicView] = useState(false);
   const [searchQ, setSearchQ] = useState("");
   const [autoOpenAdd, setAutoOpenAdd] = useState(false);
+  const [showNewGarden, setShowNewGarden] = useState(false);
 
   const garden = gardens.find(g => g.id === activeGarden);
 
@@ -369,17 +374,7 @@ export default function JardinApp() {
                   🌿 {g.name}
                 </button>
               ))}
-              <button onClick={async () => {
-                const name = prompt("Nombre del nuevo jardín:");
-                if (name) {
-                  const newG = { id: "g" + Date.now(), name, location: "", zone: "templada", beds: [] };
-                  setSaving(true);
-                  try {
-                    await supabase.from("gardens").insert(newG);
-                    setGardens(prev => [...prev, newG]);
-                  } finally { setSaving(false); }
-                }
-              }} style={{ display: "block", width: "100%", textAlign: "left", padding: "6px 8px", background: "transparent", border: "none", color: "#4a6a2a", cursor: "pointer", fontSize: 12, fontFamily: "inherit" }}>
+              <button onClick={() => setShowNewGarden(true)} style={{ display: "block", width: "100%", textAlign: "left", padding: "6px 8px", background: "transparent", border: "none", color: "#4a6a2a", cursor: "pointer", fontSize: 12, fontFamily: "inherit" }}>
                 ＋ Nuevo jardín
               </button>
             </div>
@@ -423,6 +418,21 @@ export default function JardinApp() {
           Guardando...
         </div>
       )}
+
+      {showNewGarden && (
+        <GardenFormModal
+          onClose={() => setShowNewGarden(false)}
+          onSave={async (data) => {
+            const newG = { id: "g" + Date.now(), name: data.name, style: data.style, location: "", zone: "templada", beds: [] };
+            setSaving(true);
+            try {
+              await supabase.from("gardens").insert(newG);
+              setGardens(prev => [...prev, newG]);
+              setShowNewGarden(false);
+            } finally { setSaving(false); }
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -456,7 +466,10 @@ function HomeSection({ plants, garden, gardens, tasks, addTask, addBitacoraEntry
       <div style={{ marginBottom: 24 }}>
         <div className="section-title">Panel principal</div>
         <h2 style={{ margin: 0, fontSize: 28, fontWeight: 400 }}>{garden?.name} <span style={{ fontSize: 16, color: "#8a7a5a" }}>— {season}</span></h2>
-        <div style={{ color: "#8a7a5a", fontSize: 14, marginTop: 4 }}>{garden?.location} · Zona {garden?.zone}</div>
+        <div style={{ color: "#8a7a5a", fontSize: 14, marginTop: 4, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span>{garden?.location} · Zona {garden?.zone}</span>
+          {garden?.style && <span className="badge" style={{ background: "#e8f0d8", color: "#4a7a2a" }}>{GARDEN_STYLE_ICON[garden.style]} {garden.style}</span>}
+        </div>
       </div>
 
       <div className="card" style={{ marginBottom: 28, borderLeft: "4px solid #5a8ab0" }}>
@@ -605,6 +618,38 @@ function QuickRegisterModal({ type, plants, gardens, activeGarden, addTask, addB
 }
 
 // ─────────────────────────────────────────────────────────────
+// GARDEN FORM MODAL — crear / editar jardín
+// ─────────────────────────────────────────────────────────────
+function GardenFormModal({ initial, onSave, onClose }) {
+  const [name, setName] = useState(initial?.name || "");
+  const [style, setStyle] = useState(initial?.style || "");
+
+  const handleSubmit = () => {
+    if (!name.trim()) return;
+    onSave({ name: name.trim(), style });
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(44,36,22,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100, padding: 16 }} onClick={onClose}>
+      <div className="card" style={{ maxWidth: 400, width: "100%", borderLeft: "4px solid #4a7a2a" }} onClick={e => e.stopPropagation()}>
+        <div className="section-title">{initial ? "Editar jardín" : "Nuevo jardín"}</div>
+        <label>Nombre</label>
+        <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Mi jardín principal, Roca..." style={{ marginBottom: 10 }} />
+        <label>🎨 Estilo de jardín</label>
+        <select value={style} onChange={e => setStyle(e.target.value)} style={{ marginBottom: 10 }}>
+          <option value="">— Elegir —</option>
+          {GARDEN_STYLES.map(s => <option key={s} value={s}>{GARDEN_STYLE_ICON[s]} {s}</option>)}
+        </select>
+        <div style={{ display: "flex", gap: 10, marginTop: 6 }}>
+          <button className="btn-primary" onClick={handleSubmit}>Guardar</button>
+          <button className="btn-secondary" onClick={onClose}>Cancelar</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
 // PLANT SHEET
 // ─────────────────────────────────────────────────────────────
 // PLANT SHEET — formulario de edicion completo
@@ -626,6 +671,7 @@ function PlantSheet({ plantId, getPlantContext, onBack, updatePlantNote, addTask
       family: plant.family || "",
       description: plant.description || "",
       offseason: plant.offseason || "",
+      substrate: plant.substrate || "",
       lifecycle: plant.lifecycle || "perenne",
       status: plant.status || "en tierra",
       sunlight: plant.sunlight || "pleno sol",
@@ -667,6 +713,7 @@ function PlantSheet({ plantId, getPlantContext, onBack, updatePlantNote, addTask
       family: editData.family,
       description: editData.description,
       offseason: editData.offseason,
+      substrate: editData.substrate,
       lifecycle: editData.lifecycle,
       status: editData.status,
       sunlight: editData.sunlight,
@@ -691,6 +738,7 @@ function PlantSheet({ plantId, getPlantContext, onBack, updatePlantNote, addTask
         family: updated.family,
         description: updated.description,
         offseason: updated.offseason,
+        substrate: updated.substrate,
         lifecycle: updated.lifecycle,
         status: updated.status,
         sunlight: updated.sunlight,
@@ -769,6 +817,10 @@ function PlantSheet({ plantId, getPlantContext, onBack, updatePlantNote, addTask
 
           <Field label="🍂 Contraestación — comportamiento fuera de temporada">
             <textarea style={{ ...inp, resize: "vertical" }} rows={2} value={editData.offseason} onChange={e => setEditData(d => ({ ...d, offseason: e.target.value }))} placeholder="¿Pierde hojas? ¿Descansa? ¿Qué cuidados necesita?" />
+          </Field>
+
+          <Field label="🪨 Sustrato ideal">
+            <input style={inp} value={editData.substrate} onChange={e => setEditData(d => ({ ...d, substrate: e.target.value }))} placeholder="Bien drenado, arenoso, rico en materia orgánica..." />
           </Field>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
@@ -898,6 +950,7 @@ function PlantSheet({ plantId, getPlantContext, onBack, updatePlantNote, addTask
                 )}
                 {plant.leafShape && <InfoRow icon="🍁" label="Forma de hoja" value={plant.leafShape} />}
                 {plant.habit && <InfoRow icon="🌳" label="Porte" value={plant.habit} />}
+                {plant.substrate && <InfoRow icon="🪨" label="Sustrato" value={plant.substrate} />}
               </div>
               {plant.offseason && (
                 <div style={{ marginTop: 12, padding: "10px 12px", background: "#f8f4ec", borderRadius: 8, fontSize: 13 }}>
@@ -1081,7 +1134,7 @@ function PlantsSection({ plants, setPlants, setSelectedPlantId, garden, searchQ,
       setAutoOpenAdd(false);
     }
   }, [autoOpenAdd, setAutoOpenAdd]);
-  const emptyPlant = { name: "", emoji: "", family: "", description: "", heightCm: ["", ""], diameterCm: ["", ""], floweringSeason: [], sowingSeason: [], transplantSeason: [], flowerColor: "", foliageColor: "", leafShape: "", habit: "", lifecycle: "", role: [], offseason: "", waterDays: "", sunlight: "", zone: ["templada"], tags: [], communityNotes: [], plantOfDay: false, images: [], inGarden: true, status: "" };
+  const emptyPlant = { name: "", emoji: "", family: "", description: "", heightCm: ["", ""], diameterCm: ["", ""], floweringSeason: [], sowingSeason: [], transplantSeason: [], flowerColor: "", foliageColor: "", leafShape: "", habit: "", lifecycle: "", role: [], offseason: "", substrate: "", waterDays: "", sunlight: "", zone: ["templada"], tags: [], communityNotes: [], plantOfDay: false, images: [], inGarden: true, status: "" };
   const [newPlant, setNewPlant] = useState(emptyPlant);
   const [newFloweringSeason, setNewFloweringSeason] = useState("");
   const [newSowingSeason, setNewSowingSeason] = useState("");
@@ -1126,7 +1179,7 @@ function PlantsSection({ plants, setPlants, setSelectedPlantId, garden, searchQ,
     };
     const dbPlant = {
       id: plant.id, name: plant.name, emoji: plant.emoji, family: plant.family,
-      description: plant.description, offseason: plant.offseason,
+      description: plant.description, offseason: plant.offseason, substrate: plant.substrate,
       lifecycle: plant.lifecycle, sunlight: plant.sunlight,
       water_days: plant.waterDays,
       height_min: plant.heightCm[0], height_max: plant.heightCm[1],
@@ -1227,6 +1280,11 @@ function PlantsSection({ plants, setPlants, setSelectedPlantId, garden, searchQ,
           <div style={{ marginBottom: 12 }}>
             <Lbl>🍂 Contraestación</Lbl>
             <textarea style={{ ...inp, resize: "vertical" }} rows={2} value={newPlant.offseason} onChange={e => setNewPlant(p => ({ ...p, offseason: e.target.value }))} placeholder="¿Pierde hojas? ¿Descansa? ¿Qué cuidados necesita fuera de temporada?" />
+          </div>
+
+          <div style={{ marginBottom: 12 }}>
+            <Lbl>🪨 Sustrato ideal</Lbl>
+            <input style={inp} value={newPlant.substrate} onChange={e => setNewPlant(p => ({ ...p, substrate: e.target.value }))} placeholder="Bien drenado, arenoso, rico en materia orgánica..." />
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
@@ -1385,7 +1443,7 @@ function PlantsSection({ plants, setPlants, setSelectedPlantId, garden, searchQ,
 // ─────────────────────────────────────────────────────────────
 function EncyclopediaSection({ plants, setPlants, setSelectedPlantId, supabase, setSaving }) {
   const [showAdd, setShowAdd] = useState(false);
-  const emptyPlant = { name: "", emoji: "", family: "", description: "", heightCm: ["", ""], diameterCm: ["", ""], floweringSeason: [], sowingSeason: [], transplantSeason: [], flowerColor: "", foliageColor: "", leafShape: "", habit: "", lifecycle: "", role: [], offseason: "", waterDays: "", sunlight: "", zone: ["templada"], tags: [], communityNotes: [], plantOfDay: false, images: [], inGarden: false, status: "" };
+  const emptyPlant = { name: "", emoji: "", family: "", description: "", heightCm: ["", ""], diameterCm: ["", ""], floweringSeason: [], sowingSeason: [], transplantSeason: [], flowerColor: "", foliageColor: "", leafShape: "", habit: "", lifecycle: "", role: [], offseason: "", substrate: "", waterDays: "", sunlight: "", zone: ["templada"], tags: [], communityNotes: [], plantOfDay: false, images: [], inGarden: false, status: "" };
   const [newPlant, setNewPlant] = useState(emptyPlant);
   const [newFloweringSeason, setNewFloweringSeason] = useState("");
   const [newSowingSeason, setNewSowingSeason] = useState("");
@@ -1431,7 +1489,7 @@ function EncyclopediaSection({ plants, setPlants, setSelectedPlantId, supabase, 
     };
     const dbPlant = {
       id: plant.id, name: plant.name, emoji: plant.emoji, family: plant.family,
-      description: plant.description, offseason: plant.offseason,
+      description: plant.description, offseason: plant.offseason, substrate: plant.substrate,
       lifecycle: plant.lifecycle, sunlight: plant.sunlight,
       water_days: plant.waterDays,
       height_min: plant.heightCm[0], height_max: plant.heightCm[1],
@@ -1531,6 +1589,11 @@ function EncyclopediaSection({ plants, setPlants, setSelectedPlantId, supabase, 
           <div style={{ marginBottom: 12 }}>
             <Lbl>🍂 Contraestación</Lbl>
             <textarea style={{ ...inp, resize: "vertical" }} rows={2} value={newPlant.offseason} onChange={e => setNewPlant(p => ({ ...p, offseason: e.target.value }))} placeholder="¿Pierde hojas? ¿Descansa? ¿Qué cuidados necesita fuera de temporada?" />
+          </div>
+
+          <div style={{ marginBottom: 12 }}>
+            <Lbl>🪨 Sustrato ideal</Lbl>
+            <input style={inp} value={newPlant.substrate} onChange={e => setNewPlant(p => ({ ...p, substrate: e.target.value }))} placeholder="Bien drenado, arenoso, rico en materia orgánica..." />
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
@@ -1944,6 +2007,7 @@ function DesignSection({ garden, gardens, setGardens, plants, encyclopediaPlants
   const [newBed, setNewBed] = useState({ name: "", w: 3, h: 2 });
   const [showEncyclopedia, setShowEncyclopedia] = useState(false);
   const [addPlantQuery, setAddPlantQuery] = useState("");
+  const [showEditGarden, setShowEditGarden] = useState(false);
 
   const updateGardenBeds = async (newBeds) => {
     setSaving(true);
@@ -1977,9 +2041,31 @@ function DesignSection({ garden, gardens, setGardens, plants, encyclopediaPlants
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-        <div><div className="section-title">Diseño del jardín</div><h2 style={{ margin: 0, fontSize: 24, fontWeight: 400 }}>{garden?.name}</h2></div>
-        <button className="btn-primary" onClick={() => setShowAddBed(v => !v)}>＋ Nuevo cantero</button>
+        <div>
+          <div className="section-title">Diseño del jardín</div>
+          <h2 style={{ margin: 0, fontSize: 24, fontWeight: 400 }}>{garden?.name}</h2>
+          {garden?.style && <span className="badge" style={{ background: "#e8f0d8", color: "#4a7a2a", marginTop: 4, display: "inline-block" }}>{GARDEN_STYLE_ICON[garden.style]} {garden.style}</span>}
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="btn-secondary" onClick={() => setShowEditGarden(true)}>✏️ Editar jardín</button>
+          <button className="btn-primary" onClick={() => setShowAddBed(v => !v)}>＋ Nuevo cantero</button>
+        </div>
       </div>
+
+      {showEditGarden && (
+        <GardenFormModal
+          initial={garden}
+          onClose={() => setShowEditGarden(false)}
+          onSave={async (data) => {
+            setSaving(true);
+            try {
+              await supabase.from("gardens").update({ name: data.name, style: data.style }).eq("id", activeGarden);
+              setGardens(prev => prev.map(g => g.id === activeGarden ? { ...g, name: data.name, style: data.style } : g));
+              setShowEditGarden(false);
+            } finally { setSaving(false); }
+          }}
+        />
+      )}
       {showAddBed && (
         <div className="card" style={{ marginBottom: 20 }}>
           <div className="section-title">Nuevo cantero</div>
