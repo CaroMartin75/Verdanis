@@ -45,6 +45,64 @@ const LEAF_SHAPES = ["acintada", "lobulada", "redondeada", "compuesta", "acicula
 const PLANT_HABITS = ["columnar", "esférico", "rastrero", "trepador", "arbustivo", "arborescente"];
 const GARDEN_STYLES = ["formal", "naturalista", "pradera/pastizal", "mediterráneo", "huerta", "mixto", "otro"];
 const GARDEN_STYLE_ICON = { formal: "🏛️", naturalista: "🌿", "pradera/pastizal": "🌾", mediterráneo: "🫒", huerta: "🥕", mixto: "🎨", otro: "📝" };
+const FLOWER_COLOR_FAMILIES = ["blanco", "amarillo", "naranja", "rojo", "rosa", "violeta", "azul", "verde"];
+const FLOWER_FAMILY_SWATCH = { blanco: "#ffffff", amarillo: "#f5d020", naranja: "#f08c20", rojo: "#d03030", rosa: "#f090b8", violeta: "#8a5ac8", azul: "#4a80d0", verde: "#7ab850" };
+const SEASON_MONTHS = { verano: [11, 0, 1], otoño: [2, 3, 4], invierno: [5, 6, 7], primavera: [8, 9, 10] };
+
+const normalizeText = (s) => (s || "").toString().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
+
+function colorFamily(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec((hex || "").trim());
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  const r = (n >> 16) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  const d = max - min;
+  const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1));
+  if (l > 0.88 || (s < 0.15 && l > 0.7)) return "blanco";
+  let h = 0;
+  if (d !== 0) {
+    if (max === r) h = ((g - b) / d) % 6;
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h = (h * 60 + 360) % 360;
+  }
+  if (h >= 345 || h < 15) return l > 0.72 ? "rosa" : "rojo";
+  if (h < 45) return "naranja";
+  if (h < 70) return "amarillo";
+  if (h < 170) return "verde";
+  if (h < 250) return "azul";
+  if (h < 330) return l > 0.75 ? "rosa" : "violeta";
+  return "rosa";
+}
+
+function plantFloweringMonths(plant) {
+  const months = new Set();
+  (plant.floweringSeason || []).forEach(entry => {
+    const key = normalizeText(entry);
+    const idx = MONTHS.findIndex(m => normalizeText(m) === key || normalizeText(m).slice(0, 3) === key);
+    if (idx >= 0) months.add(idx);
+    if (SEASON_MONTHS[key]) SEASON_MONTHS[key].forEach(i => months.add(i));
+  });
+  return months;
+}
+
+function plantsConflict(a, b) {
+  const hits = (p, other) => (p.incompatibleWith || []).some(n => normalizeText(n) === normalizeText(other.name));
+  return hits(a, b) || hits(b, a);
+}
+
+function findBedConflicts(plantIds, allPlants) {
+  const inBed = (plantIds || []).map(id => allPlants.find(p => p.id === id)).filter(Boolean);
+  const pairs = [];
+  for (let i = 0; i < inBed.length; i++) {
+    for (let j = i + 1; j < inBed.length; j++) {
+      if (plantsConflict(inBed[i], inBed[j])) pairs.push([inBed[i], inBed[j]]);
+    }
+  }
+  return pairs;
+}
 const GURU_CALENDAR = {
   0: [{ plant: "Tomate Cherry", action: "Siembra en almácigo en zonas cálidas", source: "Calendario HBA" }],
   2: [{ plant: "Lavanda", action: "Poda leve post-verano", source: "Calendario HBA" }],
@@ -81,7 +139,9 @@ function dbToPlant(p) {
     inGarden: p.in_garden !== false,
     status: p.status || "en tierra",
     aiSuggestedFields: p.ai_suggested_fields || [],
-    substrate: p.substrate || ""
+    substrate: p.substrate || "",
+    compatibleWith: p.compatible_with || [],
+    incompatibleWith: p.incompatible_with || []
   };
 }
 
@@ -105,7 +165,9 @@ function plantToDb(p) {
     in_garden: p.inGarden !== false,
     status: p.status || "en tierra",
     ai_suggested_fields: p.aiSuggestedFields || [],
-    substrate: p.substrate || ""
+    substrate: p.substrate || "",
+    compatible_with: p.compatibleWith || [],
+    incompatible_with: p.incompatibleWith || []
   };
 }
 
@@ -618,6 +680,44 @@ function QuickRegisterModal({ type, plants, gardens, activeGarden, addTask, addB
 }
 
 // ─────────────────────────────────────────────────────────────
+// COMPAT FIELD — lista de nombres (texto libre o plantas existentes)
+// ─────────────────────────────────────────────────────────────
+function CompatField({ values, onChange, suggestions, tone, listId }) {
+  const [draft, setDraft] = useState("");
+  const colors = tone === "good" ? { bg: "#e8f0d8", fg: "#4a7a2a" } : { bg: "#fde4dc", fg: "#c04020" };
+
+  const add = () => {
+    const v = draft.trim();
+    if (!v) return;
+    if (!values.some(x => normalizeText(x) === normalizeText(v))) onChange([...values, v]);
+    setDraft("");
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: values.length ? 6 : 0 }}>
+        {values.map(v => (
+          <span key={v} className="badge" style={{ background: colors.bg, color: colors.fg, display: "inline-flex", alignItems: "center", gap: 4 }}>
+            {v}
+            <span onClick={() => onChange(values.filter(x => x !== v))} style={{ cursor: "pointer", fontWeight: 700 }}>×</span>
+          </span>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <input list={listId} value={draft} onChange={e => setDraft(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); add(); } }}
+          placeholder="Buscá una planta o escribí libremente…"
+          style={{ width: "100%", background: "#faf8f3", border: "1px solid #ddd4c0", borderRadius: 8, padding: "9px 12px", fontSize: 14, color: "#2c2416", outline: "none", fontFamily: "inherit" }} />
+        <button type="button" className="btn-secondary" onClick={add}>＋</button>
+      </div>
+      <datalist id={listId}>
+        {suggestions.map(n => <option key={n} value={n} />)}
+      </datalist>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
 // GARDEN FORM MODAL — crear / editar jardín
 // ─────────────────────────────────────────────────────────────
 function GardenFormModal({ initial, onSave, onClose }) {
@@ -672,6 +772,8 @@ function PlantSheet({ plantId, getPlantContext, onBack, updatePlantNote, addTask
       description: plant.description || "",
       offseason: plant.offseason || "",
       substrate: plant.substrate || "",
+      compatibleWith: plant.compatibleWith || [],
+      incompatibleWith: plant.incompatibleWith || [],
       lifecycle: plant.lifecycle || "perenne",
       status: plant.status || "en tierra",
       sunlight: plant.sunlight || "pleno sol",
@@ -714,6 +816,8 @@ function PlantSheet({ plantId, getPlantContext, onBack, updatePlantNote, addTask
       description: editData.description,
       offseason: editData.offseason,
       substrate: editData.substrate,
+      compatibleWith: editData.compatibleWith,
+      incompatibleWith: editData.incompatibleWith,
       lifecycle: editData.lifecycle,
       status: editData.status,
       sunlight: editData.sunlight,
@@ -739,6 +843,8 @@ function PlantSheet({ plantId, getPlantContext, onBack, updatePlantNote, addTask
         description: updated.description,
         offseason: updated.offseason,
         substrate: updated.substrate,
+        compatible_with: updated.compatibleWith,
+        incompatible_with: updated.incompatibleWith,
         lifecycle: updated.lifecycle,
         status: updated.status,
         sunlight: updated.sunlight,
@@ -822,6 +928,15 @@ function PlantSheet({ plantId, getPlantContext, onBack, updatePlantNote, addTask
           <Field label="🪨 Sustrato ideal">
             <input style={inp} value={editData.substrate} onChange={e => setEditData(d => ({ ...d, substrate: e.target.value }))} placeholder="Bien drenado, arenoso, rico en materia orgánica..." />
           </Field>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <Field label="💚 Va bien con">
+              <CompatField tone="good" listId="compat-good-list" values={editData.compatibleWith || []} suggestions={plants.filter(p => p.id !== plantId).map(p => p.name)} onChange={v => setEditData(d => ({ ...d, compatibleWith: v }))} />
+            </Field>
+            <Field label="⚠️ No combina con">
+              <CompatField tone="bad" listId="compat-bad-list" values={editData.incompatibleWith || []} suggestions={plants.filter(p => p.id !== plantId).map(p => p.name)} onChange={v => setEditData(d => ({ ...d, incompatibleWith: v }))} />
+            </Field>
+          </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
             <Field label="Ciclo de vida">
@@ -952,6 +1067,22 @@ function PlantSheet({ plantId, getPlantContext, onBack, updatePlantNote, addTask
                 {plant.habit && <InfoRow icon="🌳" label="Porte" value={plant.habit} />}
                 {plant.substrate && <InfoRow icon="🪨" label="Sustrato" value={plant.substrate} />}
               </div>
+              {((plant.compatibleWith || []).length > 0 || (plant.incompatibleWith || []).length > 0) && (
+                <div style={{ marginTop: 12, fontSize: 13 }}>
+                  {(plant.compatibleWith || []).length > 0 && (
+                    <div style={{ marginBottom: 6 }}>
+                      <strong style={{ color: "#4a7a2a" }}>💚 Va bien con:</strong>{" "}
+                      {plant.compatibleWith.map(n => <span key={n} className="badge" style={{ background: "#e8f0d8", color: "#4a7a2a", marginRight: 4 }}>{n}</span>)}
+                    </div>
+                  )}
+                  {(plant.incompatibleWith || []).length > 0 && (
+                    <div>
+                      <strong style={{ color: "#c04020" }}>⚠️ No combina con:</strong>{" "}
+                      {plant.incompatibleWith.map(n => <span key={n} className="badge" style={{ background: "#fde4dc", color: "#c04020", marginRight: 4 }}>{n}</span>)}
+                    </div>
+                  )}
+                </div>
+              )}
               {plant.offseason && (
                 <div style={{ marginTop: 12, padding: "10px 12px", background: "#f8f4ec", borderRadius: 8, fontSize: 13 }}>
                   <strong style={{ color: "#8a5a2a" }}>🍂 Contraestación:</strong>
@@ -2008,6 +2139,19 @@ function DesignSection({ garden, gardens, setGardens, plants, encyclopediaPlants
   const [showEncyclopedia, setShowEncyclopedia] = useState(false);
   const [addPlantQuery, setAddPlantQuery] = useState("");
   const [showEditGarden, setShowEditGarden] = useState(false);
+  const [showSearch, setShowSearch] = useState(true);
+  const [filters, setFilters] = useState({ flowerColor: "", leafShape: "", habit: "", maxHeight: "", month: "", sunlight: "" });
+  const setFilter = (key, value) => setFilters(f => ({ ...f, [key]: value }));
+  const hasFilters = Object.values(filters).some(v => v !== "");
+  const searchResults = !hasFilters ? [] : [...plants, ...encyclopediaPlants].filter(p => {
+    if (filters.flowerColor && colorFamily(p.flowerColor) !== filters.flowerColor) return false;
+    if (filters.leafShape && p.leafShape !== filters.leafShape) return false;
+    if (filters.habit && p.habit !== filters.habit) return false;
+    if (filters.maxHeight !== "" && !(Number(p.heightCm?.[1]) > 0 && Number(p.heightCm[1]) <= Number(filters.maxHeight))) return false;
+    if (filters.month !== "" && !plantFloweringMonths(p).has(Number(filters.month))) return false;
+    if (filters.sunlight && p.sunlight !== filters.sunlight) return false;
+    return true;
+  });
 
   const updateGardenBeds = async (newBeds) => {
     setSaving(true);
@@ -2037,6 +2181,10 @@ function DesignSection({ garden, gardens, setGardens, plants, encyclopediaPlants
   };
 
   const bed = (garden?.beds || []).find(b => b.id === selectedBed);
+  const allKnownPlants = [...plants, ...encyclopediaPlants];
+  const bedConflicts = bed ? findBedConflicts(bed.plantIds, allKnownPlants) : [];
+  const bedMembers = bed ? (bed.plantIds || []).map(id => allKnownPlants.find(p => p.id === id)).filter(Boolean) : [];
+  const conflictsWithBed = (p) => bedMembers.some(m => m.id !== p.id && plantsConflict(m, p));
 
   return (
     <div>
@@ -2086,7 +2234,7 @@ function DesignSection({ garden, gardens, setGardens, plants, encyclopediaPlants
           {(garden?.beds || []).map(b => (
             <div key={b.id} onClick={() => setSelectedBed(b.id === selectedBed ? null : b.id)}
               style={{ cursor: "pointer", width: b.w * 60, minWidth: 80, minHeight: 50, height: b.h * 60, background: selectedBed === b.id ? "#d4f0a8" : "#e8f5d8", border: `2px solid ${selectedBed === b.id ? "#4a7a2a" : "#a8c890"}`, borderRadius: 8, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 6 }}>
-              <div style={{ fontSize: 10, fontWeight: 600, color: "#4a7a2a", textAlign: "center" }}>{b.name}</div>
+              <div style={{ fontSize: 10, fontWeight: 600, color: "#4a7a2a", textAlign: "center" }}>{b.name}{findBedConflicts(b.plantIds, allKnownPlants).length > 0 && <span title="Hay plantas incompatibles en este cantero"> ⚠️</span>}</div>
               <div style={{ fontSize: 11, color: "#8a7a5a", marginTop: 2 }}>{b.w}×{b.h}m</div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 2, marginTop: 4, justifyContent: "center" }}>
                 {(b.plantIds || []).map(pid => { const pl = plants.find(p => p.id === pid); return pl ? <span key={pid} style={{ fontSize: 16 }} title={pl.name}>{pl.emoji}</span> : null; })}
@@ -2096,10 +2244,99 @@ function DesignSection({ garden, gardens, setGardens, plants, encyclopediaPlants
           {!(garden?.beds?.length) && <p style={{ color: "#8a7a5a" }}>Sin canteros. Crea el primero arriba.</p>}
         </div>
       </div>
+      <div className="card" style={{ marginBottom: 20, borderLeft: "4px solid #5a4a8a" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div className="section-title" style={{ margin: 0 }}>🔍 Buscador de plantas</div>
+          <button className="btn-secondary" style={{ fontSize: 11, padding: "4px 10px" }} onClick={() => setShowSearch(v => !v)}>{showSearch ? "Ocultar" : "Mostrar"}</button>
+        </div>
+        {showSearch && (
+          <div style={{ marginTop: 12 }}>
+            <div className="grid-3" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
+              <div><label>🎨 Color de flor</label>
+                <select value={filters.flowerColor} onChange={e => setFilter("flowerColor", e.target.value)}>
+                  <option value="">Cualquiera</option>
+                  {FLOWER_COLOR_FAMILIES.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+              <div><label>🍁 Forma de hoja</label>
+                <select value={filters.leafShape} onChange={e => setFilter("leafShape", e.target.value)}>
+                  <option value="">Cualquiera</option>
+                  {LEAF_SHAPES.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+              <div><label>🌳 Porte</label>
+                <select value={filters.habit} onChange={e => setFilter("habit", e.target.value)}>
+                  <option value="">Cualquiera</option>
+                  {PLANT_HABITS.map(h => <option key={h} value={h}>{h}</option>)}
+                </select>
+              </div>
+              <div><label>📏 Altura máxima (cm)</label>
+                <input type="text" inputMode="numeric" value={filters.maxHeight} onChange={e => setFilter("maxHeight", e.target.value.replace(/[^0-9]/g, ""))} placeholder="Ej: 80" />
+              </div>
+              <div><label>🌸 Mes de floración</label>
+                <select value={filters.month} onChange={e => setFilter("month", e.target.value)}>
+                  <option value="">Cualquiera</option>
+                  {MONTHS.map((m, i) => <option key={m} value={i}>{m}</option>)}
+                </select>
+              </div>
+              <div><label>☀️ Luz solar</label>
+                <select value={filters.sunlight} onChange={e => setFilter("sunlight", e.target.value)}>
+                  <option value="">Cualquiera</option>
+                  {["pleno sol", "semisombra", "sombra", "luz indirecta"].map(o => <option key={o} value={o}>{o}</option>)}
+                </select>
+              </div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", margin: "12px 0 8px" }}>
+              <div style={{ fontSize: 13, color: "#8a7a5a" }}>
+                {hasFilters ? `${searchResults.length} planta${searchResults.length === 1 ? "" : "s"} cumple${searchResults.length === 1 ? "" : "n"} todos los criterios` : "Elegí uno o más filtros para ver plantas (incluye tu jardín y la enciclopedia)."}
+                {hasFilters && bed && ` · Agregando a: ${bed.name}`}
+                {hasFilters && !bed && " · Seleccioná un cantero en el plano para agregarlas directo."}
+              </div>
+              {hasFilters && <button className="btn-secondary" style={{ fontSize: 11, padding: "4px 10px" }} onClick={() => setFilters({ flowerColor: "", leafShape: "", habit: "", maxHeight: "", month: "", sunlight: "" })}>Limpiar filtros</button>}
+            </div>
+            <div className="grid-auto" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 10 }}>
+              {searchResults.map(p => {
+                const fam = colorFamily(p.flowerColor);
+                const inBed = bed && (bed.plantIds || []).includes(p.id);
+                const conflict = bed && !inBed && conflictsWithBed(p);
+                return (
+                  <div key={p.id} style={{ border: "1px solid #e0d8c8", borderRadius: 10, padding: 10, background: "#fff" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ fontSize: 24 }}>{p.emoji}</span>
+                      <span className="plant-link plant-name-font" onClick={() => setSelectedPlantId(p.id)} style={{ fontSize: 16, fontWeight: 600, flex: 1 }}>{p.name}</span>
+                      {!p.inGarden && <span className="badge" style={{ background: "#e8e0f5", color: "#5a4a8a", fontSize: 10 }}>📚</span>}
+                    </div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 6, fontSize: 11, color: "#8a7a5a", alignItems: "center" }}>
+                      {fam && <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}><span style={{ width: 10, height: 10, borderRadius: "50%", background: p.flowerColor, border: "1px solid #ddd", display: "inline-block" }} />{fam}</span>}
+                      {p.leafShape && <span>🍁 {p.leafShape}</span>}
+                      {p.habit && <span>🌳 {p.habit}</span>}
+                      {p.heightCm?.[1] > 0 && <span>📏 {p.heightCm[1]}cm</span>}
+                      {p.sunlight && <span>☀️ {p.sunlight}</span>}
+                    </div>
+                    {conflict && <div style={{ marginTop: 6, fontSize: 11, color: "#c04020" }}>⚠️ No combina con plantas de este cantero</div>}
+                    {bed && (
+                      <button className="btn-secondary" disabled={inBed} onClick={() => addPlantToBed(bed.id, p.id, !p.inGarden)} style={{ marginTop: 8, fontSize: 12, padding: "4px 10px", width: "100%" }}>
+                        {inBed ? "Ya está en el cantero" : `＋ Agregar a ${bed.name}`}
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+
       {bed && (
         <div className="card">
           <div className="section-title">Cantero: {bed.name}</div>
           <div style={{ fontSize: 13, color: "#8a7a5a", marginBottom: 14 }}>Dimensiones: {bed.w} × {bed.h} m · Área: {(bed.w * bed.h).toFixed(1)} m²</div>
+          {bedConflicts.length > 0 && (
+            <div style={{ background: "#fde4dc", border: "1px solid #e8b8a8", borderRadius: 8, padding: "10px 12px", marginBottom: 14, fontSize: 13, color: "#c04020" }}>
+              <strong>⚠️ Plantas incompatibles en este cantero:</strong>
+              {bedConflicts.map(([a, b]) => <div key={a.id + b.id} style={{ marginTop: 4 }}>{a.emoji} {a.name} ✕ {b.emoji} {b.name}</div>)}
+            </div>
+          )}
           <div className="grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
             <div>
               <div style={{ fontWeight: 600, marginBottom: 10 }}>Plantas en este cantero</div>
@@ -2109,7 +2346,7 @@ function DesignSection({ garden, gardens, setGardens, plants, encyclopediaPlants
                   return pl ? (
                     <div key={pid} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
                       <span style={{ fontSize: 22 }}>{pl.emoji}</span>
-                      <span className="plant-link" onClick={() => setSelectedPlantId(pid)} style={{ fontSize: 14, flex: 1 }}>{pl.name}</span>
+                      <span className="plant-link" onClick={() => setSelectedPlantId(pid)} style={{ fontSize: 14, flex: 1 }}>{pl.name}{bedConflicts.some(pair => pair.some(x => x.id === pid)) && <span title="Incompatible con otra planta del cantero"> ⚠️</span>}</span>
                       <button onClick={() => removePlantFromBed(bed.id, pid)} style={{ background: "none", border: "1px solid #e0c8b8", color: "#c06040", borderRadius: 6, padding: "2px 8px", cursor: "pointer", fontSize: 12 }}>✕</button>
                     </div>
                   ) : null;
@@ -2130,6 +2367,7 @@ function DesignSection({ garden, gardens, setGardens, plants, encyclopediaPlants
                   <button key={p.id} onClick={() => addPlantToBed(bed.id, p.id, !p.inGarden)}
                     style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", background: "none", border: "1px solid #e0d8c8", borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 13, marginBottom: 6, fontFamily: "inherit", textAlign: "left" }}>
                     <span>{p.emoji}</span><span style={{ flex: 1 }}>{p.name}</span>
+                    {conflictsWithBed(p) && <span title="No combina con plantas de este cantero" style={{ fontSize: 12 }}>⚠️</span>}
                     {!p.inGarden && <span className="badge" style={{ background: "#e8e0f5", color: "#5a4a8a", fontSize: 10 }}>📚</span>}
                   </button>
                 ))}
