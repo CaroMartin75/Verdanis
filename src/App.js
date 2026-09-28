@@ -39,6 +39,8 @@ const TASK_TYPES = ["riego","poda","fertilización","siembra","trasplante","cose
 const LIFECYCLE_LABEL = { anual: "🌱 Anual", bianual: "🌿 Bianual", perenne: "🌳 Perenne" };
 const BITACORA_CATEGORIES = ["clima", "flora silvestre", "fauna", "comunidad", "observación general", "otro"];
 const BITACORA_CATEGORY_ICON = { clima: "🌦", "flora silvestre": "🌼", fauna: "🐝", comunidad: "🏘️", "observación general": "🔎", otro: "📝" };
+const BITACORA_TASK_TYPES = ["raleo", "limpieza", "plantación", "fertilización", "control de plagas", "poda", "riego", "cosecha", "observación", "otro"];
+const BITACORA_TASK_TYPE_ICON = { raleo: "➖", limpieza: "🧹", plantación: "🌳", fertilización: "🌾", "control de plagas": "🐛", poda: "✂️", riego: "💧", cosecha: "🧺", observación: "🔍", otro: "📝" };
 const PLANT_STATUSES = ["en tierra", "en maceta", "en espera de plantar", "deseada"];
 const PLANT_STATUS_ICON = { "en tierra": "🌱", "en maceta": "🪴", "en espera de plantar": "⏳", "deseada": "💭" };
 const LEAF_SHAPES = ["acintada", "lobulada", "redondeada", "compuesta", "acicular", "lanceolada"];
@@ -294,6 +296,44 @@ export default function JardinApp() {
     } finally { setSaving(false); }
   };
 
+  // Anotación de bitácora tipo log: una entrada + una tarea por cada
+  // combinación planta × tipo de tarea seleccionada.
+  const addBitacoraLogEntry = async ({ text, gardenId, date, plantIds, taskTypes }) => {
+    setSaving(true);
+    try {
+      const newEntry = {
+        id: "bt" + Date.now(),
+        date,
+        category: "observación general",
+        text,
+        garden_id: gardenId || null,
+        plant_id: plantIds.length === 1 ? plantIds[0] : null,
+      };
+      await supabase.from("bitacora").insert(newEntry);
+      setBitacora(prev => [...prev, dbToBitacora(newEntry)]);
+
+      if (plantIds.length && taskTypes.length) {
+        const stamp = Date.now();
+        let i = 0;
+        const newTasks = [];
+        const newRecords = [];
+        plantIds.forEach(plantId => {
+          taskTypes.forEach(type => {
+            i += 1;
+            newTasks.push({ id: "t" + stamp + "_" + i, plant_id: plantId, garden_id: gardenId || "", bed_id: "", type, date, note: text, learned_pattern: true });
+            if (text) newRecords.push({ id: "r" + stamp + "_" + i, plant_id: plantId, garden_id: gardenId || "", date, text: "[" + type.toUpperCase() + "] " + text, evolution: "neutral" });
+          });
+        });
+        await supabase.from("tasks").insert(newTasks);
+        setTasks(prev => [...prev, ...newTasks.map(dbToTask)]);
+        if (newRecords.length) {
+          await supabase.from("records").insert(newRecords);
+          setRecords(prev => [...prev, ...newRecords.map(dbToRecord)]);
+        }
+      }
+    } finally { setSaving(false); }
+  };
+
   const promoteToGarden = async (plantId) => {
     setSaving(true);
     try {
@@ -451,7 +491,7 @@ export default function JardinApp() {
                   {activeSection === "plantas" && <PlantsSection plants={gardenPlants} setPlants={setPlants} setSelectedPlantId={setSelectedPlantId} garden={garden} searchQ={searchQ} setSearchQ={setSearchQ} getPlantContext={getPlantContext} supabase={supabase} plantToDb={plantToDb} setSaving={setSaving} autoOpenAdd={autoOpenAdd} setAutoOpenAdd={setAutoOpenAdd} />}
                   {activeSection === "tareas" && <TasksSection tasks={tasks} plants={gardenPlants} gardens={gardens} garden={garden} addTask={addTask} setSelectedPlantId={setSelectedPlantId} />}
                   {activeSection === "calendario" && <CalendarSection tasks={tasks} plants={plants} garden={garden} setSelectedPlantId={setSelectedPlantId} bitacora={bitacora} gardens={gardens} />}
-                  {activeSection === "bitacora" && <BitacoraSection bitacora={bitacora} addBitacoraEntry={addBitacoraEntry} gardens={gardens} plants={gardenPlants} setSelectedPlantId={setSelectedPlantId} />}
+                  {activeSection === "bitacora" && <BitacoraSection bitacora={bitacora} addBitacoraLogEntry={addBitacoraLogEntry} gardens={gardens} plants={gardenPlants} setSelectedPlantId={setSelectedPlantId} activeGarden={activeGarden} />}
                   {activeSection === "diseno" && <DesignSection garden={garden} gardens={gardens} setGardens={setGardens} plants={gardenPlants} encyclopediaPlants={encyclopediaPlants} promoteToGarden={promoteToGarden} setSelectedPlantId={setSelectedPlantId} activeGarden={activeGarden} supabase={supabase} setSaving={setSaving} />}
                   {activeSection === "enciclopedia" && <EncyclopediaSection plants={encyclopediaPlants} setPlants={setPlants} setSelectedPlantId={setSelectedPlantId} supabase={supabase} setSaving={setSaving} />}
                   {activeSection === "plagas" && <PestsSection pests={pests} setPests={setPests} plants={gardenPlants} garden={garden} setSelectedPlantId={setSelectedPlantId} supabase={supabase} addPest={addPest} setSaving={setSaving} autoOpenAdd={autoOpenAdd} setAutoOpenAdd={setAutoOpenAdd} />}
@@ -583,7 +623,7 @@ function HomeSection({ plants, garden, gardens, tasks, addTask, addBitacoraEntry
 
 function QuickRegisterModal({ type, plants, gardens, activeGarden, addTask, addBitacoraEntry, addPest, onClose }) {
   const today = new Date().toISOString().slice(0, 10);
-  const taskTypes_es = { poda: "✂️", riego: "💧", fertilización: "🌾", siembra: "🌱", trasplante: "🪴", cosecha: "🧺", tratamiento: "💊", observación: "👁", otro: "📝" };
+  const taskTypes_es = { poda: "✂️", riego: "💧", fertilización: "🌾", siembra: "🌱", trasplante: "🪴", cosecha: "🧺", tratamiento: "💊", observación: "🔍", otro: "📝", raleo: "➖", limpieza: "🧹", plantación: "🌳", "control de plagas": "🐛" };
   const [taskForm, setTaskForm] = useState({ plantId: plants[0]?.id || "", type: "observación", date: today, note: "" });
   const [noteForm, setNoteForm] = useState({ date: today, category: type === "nota" ? "otro" : "observación general", text: "", gardenId: activeGarden || "", plantId: "" });
   const [pestForm, setPestForm] = useState({ plantId: plants[0]?.id || "", name: "", date: today, treatment: "" });
@@ -875,7 +915,7 @@ function PlantSheet({ plantId, getPlantContext, onBack, updatePlantNote, addTask
   };
 
   const TASK_TYPES = ["riego", "poda", "fertilizacion", "siembra", "trasplante", "cosecha", "tratamiento", "observacion", "otro"];
-  const taskTypes_es = { poda: "✂️", riego: "💧", fertilizacion: "🌾", siembra: "🌱", trasplante: "🪴", cosecha: "🧺", tratamiento: "💊", observacion: "👁", otro: "📝" };
+  const taskTypes_es = { poda: "✂️", riego: "💧", fertilizacion: "🌾", siembra: "🌱", trasplante: "🪴", cosecha: "🧺", tratamiento: "💊", observacion: "🔍", otro: "📝" };
   const LIFECYCLE_LABEL = { anual: "🌱 Anual", bianual: "🌿 Bianual", perenne: "🌳 Perenne" };
   const inp = { width: "100%", background: "#faf8f3", border: "1px solid #ddd4c0", borderRadius: 8, padding: "9px 12px", fontSize: 14, color: "#2c2416", outline: "none", fontFamily: "inherit" };
   const Lbl = ({ children }) => <div style={{ fontSize: 11, letterSpacing: 1, textTransform: "uppercase", color: "#8a7a5a", marginBottom: 5 }}>{children}</div>;
@@ -1874,7 +1914,7 @@ function TasksSection({ tasks, plants, gardens, garden, addTask, setSelectedPlan
   const [filterType, setFilterType] = useState("todos");
   const [newT, setNewT] = useState({ plantId: plants[0]?.id || "", gardenId: garden?.id || "", bedId: "", type: "poda", date: new Date().toISOString().slice(0, 10), note: "" });
   const [showAdd, setShowAdd] = useState(false);
-  const taskTypes_es = { poda: "✂️", riego: "💧", fertilización: "🌾", siembra: "🌱", trasplante: "🪴", cosecha: "🧺", tratamiento: "💊", observación: "👁", otro: "📝" };
+  const taskTypes_es = { poda: "✂️", riego: "💧", fertilización: "🌾", siembra: "🌱", trasplante: "🪴", cosecha: "🧺", tratamiento: "💊", observación: "🔍", otro: "📝", raleo: "➖", limpieza: "🧹", plantación: "🌳", "control de plagas": "🐛" };
   const gardenTasks = tasks.filter(t => t.gardenId === garden?.id);
   const filtered = filterType === "todos" ? gardenTasks : gardenTasks.filter(t => t.type === filterType);
   const grouped = {};
@@ -1954,7 +1994,7 @@ function CalendarSection({ tasks, plants, garden, setSelectedPlantId, bitacora =
   const byPlant = {};
   monthTasks.forEach(t => { if (!byPlant[t.plantId]) byPlant[t.plantId] = []; byPlant[t.plantId].push(t); });
   const guruThisMonth = GURU_CALENDAR[viewMonth] || [];
-  const taskTypes_es = { poda: "✂️", riego: "💧", fertilización: "🌾", siembra: "🌱", trasplante: "🪴", cosecha: "🧺", tratamiento: "💊", observación: "👁", otro: "📝" };
+  const taskTypes_es = { poda: "✂️", riego: "💧", fertilización: "🌾", siembra: "🌱", trasplante: "🪴", cosecha: "🧺", tratamiento: "💊", observación: "🔍", otro: "📝", raleo: "➖", limpieza: "🧹", plantación: "🌳", "control de plagas": "🐛" };
 
   return (
     <div>
@@ -2037,20 +2077,25 @@ function CalendarSection({ tasks, plants, garden, setSelectedPlantId, bitacora =
 // ─────────────────────────────────────────────────────────────
 // BITÁCORA SECTION
 // ─────────────────────────────────────────────────────────────
-function BitacoraSection({ bitacora, addBitacoraEntry, gardens, plants = [], setSelectedPlantId }) {
+function BitacoraSection({ bitacora, addBitacoraLogEntry, gardens, plants = [], setSelectedPlantId, activeGarden }) {
   const [showAdd, setShowAdd] = useState(false);
-  const [newEntry, setNewEntry] = useState({ date: new Date().toISOString().slice(0, 10), category: "observación general", text: "", gardenId: "", plantId: "" });
+  const emptyLog = { date: new Date().toISOString().slice(0, 10), gardenId: activeGarden || "", text: "", plantIds: [], taskTypes: [] };
+  const [log, setLog] = useState(emptyLog);
   const [filterCat, setFilterCat] = useState("todas");
 
-  const handleAdd = () => {
-    if (!newEntry.text.trim()) return;
-    addBitacoraEntry(newEntry);
-    setNewEntry(e => ({ ...e, text: "", plantId: "" }));
+  const togglePlant = (id) => setLog(l => ({ ...l, plantIds: l.plantIds.includes(id) ? l.plantIds.filter(x => x !== id) : [...l.plantIds, id] }));
+  const toggleType = (t) => setLog(l => ({ ...l, taskTypes: l.taskTypes.includes(t) ? l.taskTypes.filter(x => x !== t) : [...l.taskTypes, t] }));
+
+  const handleAdd = async () => {
+    if (!log.text.trim()) return;
+    await addBitacoraLogEntry(log);
+    setLog({ ...emptyLog, gardenId: log.gardenId });
     setShowAdd(false);
   };
 
   const sorted = bitacora.slice().sort((a, b) => b.date.localeCompare(a.date));
   const filtered = filterCat === "todas" ? sorted : sorted.filter(b => b.category === filterCat);
+  const taskCount = log.plantIds.length * log.taskTypes.length;
 
   return (
     <div>
@@ -2062,33 +2107,54 @@ function BitacoraSection({ bitacora, addBitacoraEntry, gardens, plants = [], set
       {showAdd && (
         <div className="card" style={{ marginBottom: 20, borderLeft: "4px solid #8ab860" }}>
           <div className="section-title">Nueva anotación</div>
-          <div className="grid-3" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12 }}>
-            <div><label>Fecha</label><input type="date" value={newEntry.date} onChange={e => setNewEntry(x => ({ ...x, date: e.target.value }))} /></div>
-            <div><label>Categoría</label>
-              <select value={newEntry.category} onChange={e => setNewEntry(x => ({ ...x, category: e.target.value }))}>
-                {BITACORA_CATEGORIES.map(c => <option key={c} value={c}>{BITACORA_CATEGORY_ICON[c]} {c}</option>)}
-              </select>
-            </div>
+
+          <label>¿Qué hiciste? (texto libre)</label>
+          <textarea rows={4} value={log.text} onChange={e => setLog(l => ({ ...l, text: e.target.value }))} placeholder="Raleé los almácigos de tomate, limpié hojas secas de la lavanda y regué toda la huerta..." style={{ marginBottom: 12 }} />
+
+          <div className="grid-3" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+            <div><label>Fecha</label><input type="date" value={log.date} onChange={e => setLog(l => ({ ...l, date: e.target.value }))} /></div>
             <div><label>Jardín</label>
-              <select value={newEntry.gardenId} onChange={e => setNewEntry(x => ({ ...x, gardenId: e.target.value }))}>
+              <select value={log.gardenId} onChange={e => setLog(l => ({ ...l, gardenId: e.target.value }))}>
                 <option value="">🌍 General / fuera del jardín</option>
                 {gardens.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
               </select>
             </div>
-            <div><label>Planta (opcional)</label>
-              <select value={newEntry.plantId} onChange={e => setNewEntry(x => ({ ...x, plantId: e.target.value }))}>
-                <option value="">— Sin planta puntual —</option>
-                {plants.map(p => <option key={p.id} value={p.id}>{p.emoji} {p.name}</option>)}
-              </select>
-            </div>
-            <div style={{ gridColumn: "1 / -1" }}>
-              <label>Observación</label>
-              <textarea rows={3} value={newEntry.text} onChange={e => setNewEntry(x => ({ ...x, text: e.target.value }))} placeholder="Florecieron los ciruelos en el barrio, helada fuerte esta noche, llegaron las primeras golondrinas…" />
+          </div>
+
+          <div style={{ marginBottom: 12 }}>
+            <label>🌿 Plantas involucradas (opcional, elegí una o varias)</label>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {plants.map(p => (
+                <button key={p.id} type="button" onClick={() => togglePlant(p.id)} className="btn-secondary"
+                  style={{ fontSize: 12, padding: "5px 12px", background: log.plantIds.includes(p.id) ? "#4a7a2a" : undefined, color: log.plantIds.includes(p.id) ? "#fff" : undefined, borderColor: log.plantIds.includes(p.id) ? "#4a7a2a" : undefined }}>
+                  {p.emoji} {p.name}
+                </button>
+              ))}
+              {plants.length === 0 && <span style={{ fontSize: 13, color: "#8a7a5a" }}>No tenés plantas en este jardín todavía.</span>}
             </div>
           </div>
-          <div style={{ marginTop: 14, display: "flex", gap: 10 }}>
+
+          <div style={{ marginBottom: 12 }}>
+            <label>✅ Tipo de tarea (opcional, elegí una o varias)</label>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {BITACORA_TASK_TYPES.map(t => (
+                <button key={t} type="button" onClick={() => toggleType(t)} className="btn-secondary"
+                  style={{ fontSize: 12, padding: "5px 12px", background: log.taskTypes.includes(t) ? "#4a7a2a" : undefined, color: log.taskTypes.includes(t) ? "#fff" : undefined, borderColor: log.taskTypes.includes(t) ? "#4a7a2a" : undefined }}>
+                  {BITACORA_TASK_TYPE_ICON[t]} {t}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {taskCount > 0 && (
+            <div style={{ fontSize: 13, color: "#4a7a2a", marginBottom: 12 }}>
+              ✅ Se van a crear {taskCount} tarea{taskCount === 1 ? "" : "s"} ({log.plantIds.length} planta{log.plantIds.length === 1 ? "" : "s"} × {log.taskTypes.length} tipo{log.taskTypes.length === 1 ? "" : "s"}) además de guardar la anotación.
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: 10 }}>
             <button className="btn-primary" onClick={handleAdd}>Guardar</button>
-            <button className="btn-secondary" onClick={() => setShowAdd(false)}>Cancelar</button>
+            <button className="btn-secondary" onClick={() => { setShowAdd(false); setLog(emptyLog); }}>Cancelar</button>
           </div>
         </div>
       )}
