@@ -39,8 +39,8 @@ const TASK_TYPES = ["riego","poda","fertilización","siembra","trasplante","cose
 const LIFECYCLE_LABEL = { anual: "🌱 Anual", bianual: "🌿 Bianual", perenne: "🌳 Perenne" };
 const BITACORA_CATEGORIES = ["clima", "flora silvestre", "fauna", "comunidad", "observación general", "otro"];
 const BITACORA_CATEGORY_ICON = { clima: "🌦", "flora silvestre": "🌼", fauna: "🐝", comunidad: "🏘️", "observación general": "🔎", otro: "📝" };
-const BITACORA_TASK_TYPES = ["raleo", "limpieza", "plantación", "fertilización", "control de plagas", "poda", "riego", "cosecha", "observación", "otro"];
-const BITACORA_TASK_TYPE_ICON = { raleo: "➖", limpieza: "🧹", plantación: "🌳", fertilización: "🌾", "control de plagas": "🐛", poda: "✂️", riego: "💧", cosecha: "🧺", observación: "🔍", otro: "📝" };
+const BITACORA_TASK_TYPES = ["poda", "riego", "siembra", "trasplante", "fertilización", "raleo", "limpieza", "control de plagas", "cosecha", "observación", "otro"];
+const BITACORA_TASK_TYPE_ICON = { poda: "✂️", riego: "💧", siembra: "🌱", trasplante: "🪴", fertilización: "🌾", raleo: "➖", limpieza: "🧹", "control de plagas": "🐛", cosecha: "🧺", observación: "🔍", otro: "📝" };
 const PLANT_STATUSES = ["en tierra", "en maceta", "en espera de plantar", "deseada"];
 const PLANT_STATUS_ICON = { "en tierra": "🌱", "en maceta": "🪴", "en espera de plantar": "⏳", "deseada": "💭" };
 const LEAF_SHAPES = ["acintada", "lobulada", "redondeada", "compuesta", "acicular", "lanceolada"];
@@ -753,6 +753,53 @@ function CompatField({ values, onChange, suggestions, tone, listId }) {
       <datalist id={listId}>
         {suggestions.map(n => <option key={n} value={n} />)}
       </datalist>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// MULTI PICK — selección múltiple con chips + nombres nuevos escritos a mano
+// ─────────────────────────────────────────────────────────────
+function MultiPick({ options, selected, onToggle, newNames, onNewNamesChange, placeholder, emptyText, disabledNew, disabledNewText }) {
+  const [draft, setDraft] = useState("");
+
+  const addNew = () => {
+    const v = draft.trim();
+    if (!v) return;
+    const existing = options.find(o => normalizeText(o.name ?? o.label) === normalizeText(v));
+    if (existing) {
+      if (!selected.includes(existing.id)) onToggle(existing.id);
+    } else if (!newNames.some(n => normalizeText(n) === normalizeText(v))) {
+      onNewNamesChange([...newNames, v]);
+    }
+    setDraft("");
+  };
+
+  const on = { background: "#4a7a2a", color: "#fff", borderColor: "#4a7a2a" };
+
+  return (
+    <div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+        {options.map(o => (
+          <button key={o.id} type="button" onClick={() => onToggle(o.id)} className="btn-secondary"
+            style={{ fontSize: 12, padding: "5px 12px", ...(selected.includes(o.id) ? on : {}) }}>
+            {o.label}
+          </button>
+        ))}
+        {newNames.map(n => (
+          <span key={n} className="btn-secondary" style={{ fontSize: 12, padding: "5px 12px", ...on, borderStyle: "dashed", display: "inline-flex", alignItems: "center", gap: 6, cursor: "default" }}>
+            ✨ {n} <span style={{ opacity: 0.8, fontSize: 10 }}>nueva</span>
+            <span onClick={() => onNewNamesChange(newNames.filter(x => x !== n))} style={{ cursor: "pointer", fontWeight: 700 }}>×</span>
+          </span>
+        ))}
+        {options.length === 0 && newNames.length === 0 && emptyText && <span style={{ fontSize: 13, color: "#8a7a5a" }}>{emptyText}</span>}
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <input type="text" value={draft} disabled={disabledNew} onChange={e => setDraft(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addNew(); } }}
+          placeholder={disabledNew ? disabledNewText : placeholder} style={{ flex: 1 }} />
+        <button type="button" className="btn-secondary" disabled={disabledNew} onClick={addNew}>＋</button>
+      </div>
     </div>
   );
 }
@@ -2079,12 +2126,16 @@ function CalendarSection({ tasks, plants, garden, setSelectedPlantId, bitacora =
 // ─────────────────────────────────────────────────────────────
 function BitacoraSection({ bitacora, addBitacoraLogEntry, gardens, plants = [], setSelectedPlantId, activeGarden }) {
   const [showAdd, setShowAdd] = useState(false);
-  const emptyLog = { date: new Date().toISOString().slice(0, 10), gardenId: activeGarden || "", text: "", plantIds: [], taskTypes: [] };
+  const emptyLog = { date: new Date().toISOString().slice(0, 10), gardenId: activeGarden || "", text: "", plantIds: [], newPlantNames: [], bedIds: [], newBedNames: [], taskTypes: [] };
   const [log, setLog] = useState(emptyLog);
   const [filterCat, setFilterCat] = useState("todas");
 
   const togglePlant = (id) => setLog(l => ({ ...l, plantIds: l.plantIds.includes(id) ? l.plantIds.filter(x => x !== id) : [...l.plantIds, id] }));
+  const toggleBed = (id) => setLog(l => ({ ...l, bedIds: l.bedIds.includes(id) ? l.bedIds.filter(x => x !== id) : [...l.bedIds, id] }));
   const toggleType = (t) => setLog(l => ({ ...l, taskTypes: l.taskTypes.includes(t) ? l.taskTypes.filter(x => x !== t) : [...l.taskTypes, t] }));
+  const changeGarden = (gardenId) => setLog(l => ({ ...l, gardenId, bedIds: [], newBedNames: [] }));
+  const logGarden = gardens.find(g => g.id === log.gardenId);
+  const gardenBeds = (logGarden?.beds || []).map(b => ({ id: b.id, label: b.name }));
 
   const handleAdd = async () => {
     if (!log.text.trim()) return;
@@ -2108,13 +2159,12 @@ function BitacoraSection({ bitacora, addBitacoraLogEntry, gardens, plants = [], 
         <div className="card" style={{ marginBottom: 20, borderLeft: "4px solid #8ab860" }}>
           <div className="section-title">Nueva anotación</div>
 
-          <label>¿Qué hiciste? (texto libre)</label>
-          <textarea rows={4} value={log.text} onChange={e => setLog(l => ({ ...l, text: e.target.value }))} placeholder="Raleé los almácigos de tomate, limpié hojas secas de la lavanda y regué toda la huerta..." style={{ marginBottom: 12 }} />
+          <textarea rows={5} value={log.text} onChange={e => setLog(l => ({ ...l, text: e.target.value }))} placeholder="Contá qué hiciste hoy en el jardín..." style={{ marginBottom: 12, fontSize: 15 }} />
 
           <div className="grid-3" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
             <div><label>Fecha</label><input type="date" value={log.date} onChange={e => setLog(l => ({ ...l, date: e.target.value }))} /></div>
             <div><label>Jardín</label>
-              <select value={log.gardenId} onChange={e => setLog(l => ({ ...l, gardenId: e.target.value }))}>
+              <select value={log.gardenId} onChange={e => changeGarden(e.target.value)}>
                 <option value="">🌍 General / fuera del jardín</option>
                 {gardens.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
               </select>
@@ -2122,20 +2172,35 @@ function BitacoraSection({ bitacora, addBitacoraLogEntry, gardens, plants = [], 
           </div>
 
           <div style={{ marginBottom: 12 }}>
-            <label>🌿 Plantas involucradas (opcional, elegí una o varias)</label>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-              {plants.map(p => (
-                <button key={p.id} type="button" onClick={() => togglePlant(p.id)} className="btn-secondary"
-                  style={{ fontSize: 12, padding: "5px 12px", background: log.plantIds.includes(p.id) ? "#4a7a2a" : undefined, color: log.plantIds.includes(p.id) ? "#fff" : undefined, borderColor: log.plantIds.includes(p.id) ? "#4a7a2a" : undefined }}>
-                  {p.emoji} {p.name}
-                </button>
-              ))}
-              {plants.length === 0 && <span style={{ fontSize: 13, color: "#8a7a5a" }}>No tenés plantas en este jardín todavía.</span>}
-            </div>
+            <label>🌿 Plantas involucradas (elegí varias o escribí una nueva)</label>
+            <MultiPick
+              options={plants.map(p => ({ id: p.id, label: `${p.emoji} ${p.name}`.trim(), name: p.name }))}
+              selected={log.plantIds}
+              onToggle={togglePlant}
+              newNames={log.newPlantNames}
+              onNewNamesChange={names => setLog(l => ({ ...l, newPlantNames: names }))}
+              placeholder="Nombre de una planta que todavía no tenés…"
+              emptyText="No tenés plantas en tu jardín todavía."
+            />
           </div>
 
           <div style={{ marginBottom: 12 }}>
-            <label>✅ Tipo de tarea (opcional, elegí una o varias)</label>
+            <label>📐 Canteros (del jardín elegido, o escribí uno nuevo)</label>
+            <MultiPick
+              options={gardenBeds}
+              selected={log.bedIds}
+              onToggle={toggleBed}
+              newNames={log.newBedNames}
+              onNewNamesChange={names => setLog(l => ({ ...l, newBedNames: names }))}
+              placeholder="Nombre de un cantero nuevo…"
+              emptyText={log.gardenId ? "Este jardín todavía no tiene canteros." : ""}
+              disabledNew={!log.gardenId}
+              disabledNewText="Elegí un jardín para ver o crear canteros"
+            />
+          </div>
+
+          <div style={{ marginBottom: 12 }}>
+            <label>✅ Tipos de tarea (elegí uno o varios)</label>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
               {BITACORA_TASK_TYPES.map(t => (
                 <button key={t} type="button" onClick={() => toggleType(t)} className="btn-secondary"
@@ -2153,7 +2218,7 @@ function BitacoraSection({ bitacora, addBitacoraLogEntry, gardens, plants = [], 
           )}
 
           <div style={{ display: "flex", gap: 10 }}>
-            <button className="btn-primary" onClick={handleAdd}>Guardar</button>
+            <button className="btn-primary" onClick={handleAdd}>Guardar registro</button>
             <button className="btn-secondary" onClick={() => { setShowAdd(false); setLog(emptyLog); }}>Cancelar</button>
           </div>
         </div>
