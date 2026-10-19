@@ -183,7 +183,8 @@ function dbToPest(p) {
   return { id: p.id, plantId: p.plant_id, name: p.name, date: p.date, treatment: p.treatment, resolved: p.resolved };
 }
 function dbToBitacora(b) {
-  return { id: b.id, date: b.date, category: b.category, text: b.text, gardenId: b.garden_id || "", plantId: b.plant_id || "" };
+  const plantIds = b.plant_ids && b.plant_ids.length ? b.plant_ids : (b.plant_id ? [b.plant_id] : []);
+  return { id: b.id, date: b.date, category: b.category, text: b.text, gardenId: b.garden_id || "", plantIds, bedIds: b.bed_ids || [], taskTypes: b.task_types || [] };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -257,7 +258,7 @@ export default function JardinApp() {
     const plantRecords = records.filter(r => r.plantId === plantId);
     const plantPests = pests.filter(p => p.plantId === plantId);
     const inBeds = gardens.flatMap(g => (g.beds || []).filter(b => b.plantIds && b.plantIds.includes(plantId)).map(b => ({ ...b, gardenName: g.name })));
-    const plantBitacora = bitacora.filter(b => b.plantId === plantId);
+    const plantBitacora = bitacora.filter(b => b.plantIds.includes(plantId));
     return { plant, tasks: plantTasks, records: plantRecords, pests: plantPests, inBeds, bitacora: plantBitacora };
   }, [plants, tasks, records, pests, gardens, bitacora]);
 
@@ -287,50 +288,120 @@ export default function JardinApp() {
     } finally { setSaving(false); }
   };
 
-  const addBitacoraEntry = async (entry) => {
-    const newEntry = { id: "bt" + Date.now(), date: entry.date, category: entry.category, text: entry.text, garden_id: entry.gardenId || null, plant_id: entry.plantId || null };
-    setSaving(true);
-    try {
-      await supabase.from("bitacora").insert(newEntry);
-      setBitacora(prev => [...prev, dbToBitacora(newEntry)]);
-    } finally { setSaving(false); }
-  };
+  const dbError = (res, what) => { if (res && res.error) throw new Error(what + ": " + res.error.message); };
 
-  // Anotación de bitácora tipo log: una entrada + una tarea por cada
-  // combinación planta × tipo de tarea seleccionada.
-  const addBitacoraLogEntry = async ({ text, gardenId, date, plantIds, taskTypes }) => {
+  // Registro de bitácora tipo log. Guarda la entrada completa y además:
+  // - crea las plantas nuevas (estado "en tierra") y las ubica en los canteros elegidos
+  // - crea los canteros nuevos en el jardín elegido
+  // - crea una tarea por cada combinación planta × tipo de tarea
+  // Devuelve true si todo se guardó.
+  const addBitacoraLogEntry = async ({ text, gardenId, date, plantIds, newPlantNames, bedIds, newBedNames, taskTypes }) => {
     setSaving(true);
     try {
-      const newEntry = {
-        id: "bt" + Date.now(),
-        date,
-        category: "observación general",
-        text,
-        garden_id: gardenId || null,
-        plant_id: plantIds.length === 1 ? plantIds[0] : null,
+      const stamp = Date.now();
+
+      // Plantas nuevas: si el nombre coincide con una ficha existente (p. ej. de la enciclopedia) se reutiliza.
+      const resolvedPlantIds = [...plantIds];
+      const plantsToCreate = [];
+      const plantsToPromote = [];
+      newPlantNames.forEach((name, i) => {
+        const match = plants.find(p => normalizeText(p.name) === normalizeText(name));
+        if (match) {
+          if (!resolvedPlantIds.includes(match.id)) resolvedPlantIds.push(match.id);
+          if (!match.inGarden) plantsToPromote.push(match.id);
+        } else {
+          const id = "p" + stamp + "_" + i;
+          resolvedPlantIds.push(id);
+          plantsToCreate.push({
+            id, name, emoji: "🌿", family: "", description: "", offseason: "", substrate: "",
+            lifecycle: "perenne", sunlight: "pleno sol", water_days: 0,
+            height_min: 0, height_max: 0, diameter_min: 0, diameter_max: 0,
+            flower_color: "#ffffff", foliage_color: "", leaf_shape: "", habit: "",
+            flowering_season: [], sowing_season: [], transplant_season: [],
+            tags: [], role: [], plant_of_day: false, community_notes: [],
+            in_garden: true, status: "en tierra", ai_suggested_fields: []
+          });
+        }
+      });
+
+      // Canteros: existentes elegidos + nuevos (solo si hay jardín).
+      const gardenObj = gardens.find(g => g.id === gardenId);
+      const createdBeds = gardenObj ? newBedNames.map((name, i) => ({ id: "b" + stamp + "_" + i, name, shape: "rect", w: 3, h: 2, plantIds: [] })) : [];
+      const allBedIds = [...bedIds, ...createdBeds.map(b => b.id)];
+      const newPlantIdsForBeds = plantsToCreate.map(p => p.id);
+      let finalBeds = null;
+      if (gardenObj && (createdBeds.length || (newPlantIdsForBeds.length && allBedIds.length))) {
+        finalBeds = [...(gardenObj.beds || []), ...createdBeds].map(b =>
+          allBedIds.includes(b.id) ? { ...b, plantIds: [...new Set([...(b.plantIds || []), ...newPlantIdsForBeds])] } : b
+        );
+      }
+
+      // 1) La entrada completa (primero: si falla, no se crea nada más).
+      const entry = {
+        id: "bt" + stamp, date, category: "observación general", text,
+        garden_id: gardenId || null, plant_id: null,
+        plant_ids: resolvedPlantIds, bed_ids: allBedIds, task_types: taskTypes
       };
-      await supabase.from("bitacora").insert(newEntry);
-      setBitacora(prev => [...prev, dbToBitacora(newEntry)]);
+      dbError(await supabase.from("bitacora").insert(entry), "No se pudo guardar la entrada");
+      setBitacora(prev => [...prev, dbToBitacora(entry)]);
 
-      if (plantIds.length && taskTypes.length) {
-        const stamp = Date.now();
+      // 2) Plantas nuevas / promovidas.
+      if (plantsToCreate.length) {
+        dbError(await supabase.from("plants").insert(plantsToCreate), "No se pudieron crear las plantas nuevas");
+        setPlants(prev => [...prev, ...plantsToCreate.map(dbToPlant)]);
+      }
+      for (const id of plantsToPromote) {
+        dbError(await supabase.from("plants").update({ in_garden: true }).eq("id", id), "No se pudo sumar la planta al jardín");
+        setPlants(prev => prev.map(p => p.id === id ? { ...p, inGarden: true } : p));
+      }
+
+      // 3) Canteros.
+      if (finalBeds) {
+        dbError(await supabase.from("gardens").update({ beds: finalBeds }).eq("id", gardenId), "No se pudieron guardar los canteros");
+        setGardens(prev => prev.map(g => g.id === gardenId ? { ...g, beds: finalBeds } : g));
+      }
+
+      // 4) Tareas (+ registros de evolución) por planta × tipo.
+      if (resolvedPlantIds.length && taskTypes.length) {
+        const bedForPlant = (plantId) => {
+          const beds = finalBeds || (gardenObj?.beds || []);
+          const hit = beds.find(b => allBedIds.includes(b.id) && (b.plantIds || []).includes(plantId));
+          return hit ? hit.id : (allBedIds[0] || "");
+        };
         let i = 0;
         const newTasks = [];
         const newRecords = [];
-        plantIds.forEach(plantId => {
+        resolvedPlantIds.forEach(plantId => {
           taskTypes.forEach(type => {
             i += 1;
-            newTasks.push({ id: "t" + stamp + "_" + i, plant_id: plantId, garden_id: gardenId || "", bed_id: "", type, date, note: text, learned_pattern: true });
+            newTasks.push({ id: "t" + stamp + "_" + i, plant_id: plantId, garden_id: gardenId || "", bed_id: bedForPlant(plantId), type, date, note: text, learned_pattern: true });
             if (text) newRecords.push({ id: "r" + stamp + "_" + i, plant_id: plantId, garden_id: gardenId || "", date, text: "[" + type.toUpperCase() + "] " + text, evolution: "neutral" });
           });
         });
-        await supabase.from("tasks").insert(newTasks);
+        dbError(await supabase.from("tasks").insert(newTasks), "No se pudieron crear las tareas");
         setTasks(prev => [...prev, ...newTasks.map(dbToTask)]);
         if (newRecords.length) {
-          await supabase.from("records").insert(newRecords);
+          dbError(await supabase.from("records").insert(newRecords), "No se pudieron crear los registros de evolución");
           setRecords(prev => [...prev, ...newRecords.map(dbToRecord)]);
         }
       }
+      return true;
+    } catch (e) {
+      window.alert("No se pudo guardar el registro completo.\n\n" + e.message + "\n\nSi dice que falta una columna, hay que correr el SQL pendiente en Supabase.");
+      return false;
+    } finally { setSaving(false); }
+  };
+
+  // Editar una entrada existente: texto, fecha, categoría y plantas involucradas.
+  const updateBitacoraEntry = async (id, { text, date, category, plantIds }) => {
+    setSaving(true);
+    try {
+      dbError(await supabase.from("bitacora").update({ text, date, category, plant_ids: plantIds, plant_id: null }).eq("id", id), "No se pudo editar la entrada");
+      setBitacora(prev => prev.map(b => b.id === id ? { ...b, text, date, category, plantIds } : b));
+      return true;
+    } catch (e) {
+      window.alert("No se pudo guardar la edición.\n\n" + e.message + "\n\nSi dice que falta una columna, hay que correr el SQL pendiente en Supabase.");
+      return false;
     } finally { setSaving(false); }
   };
 
@@ -487,11 +558,11 @@ export default function JardinApp() {
               ? <PlantSheet plantId={selectedPlantId} getPlantContext={getPlantContext} onBack={() => setSelectedPlantId(null)} updatePlantNote={updatePlantNote} addTask={addTask} gardenId={activeGarden} plants={plants} setPlants={setPlants} supabase={supabase} plantToDb={plantToDb} promoteToGarden={promoteToGarden} deletePlant={deletePlant} setSaving={setSaving} />
               : (
                 <div className="fade-in">
-                  {activeSection === "inicio" && <HomeSection plants={gardenPlants} garden={garden} gardens={gardens} tasks={tasks} addTask={addTask} addBitacoraEntry={addBitacoraEntry} addPest={addPest} setActiveSection={setActiveSection} setAutoOpenAdd={setAutoOpenAdd} activeGarden={activeGarden} />}
+                  {activeSection === "inicio" && <HomeSection garden={garden} setActiveSection={setActiveSection} setAutoOpenAdd={setAutoOpenAdd} />}
                   {activeSection === "plantas" && <PlantsSection plants={gardenPlants} setPlants={setPlants} setSelectedPlantId={setSelectedPlantId} garden={garden} searchQ={searchQ} setSearchQ={setSearchQ} getPlantContext={getPlantContext} supabase={supabase} plantToDb={plantToDb} setSaving={setSaving} autoOpenAdd={autoOpenAdd} setAutoOpenAdd={setAutoOpenAdd} />}
                   {activeSection === "tareas" && <TasksSection tasks={tasks} plants={gardenPlants} gardens={gardens} garden={garden} addTask={addTask} setSelectedPlantId={setSelectedPlantId} />}
                   {activeSection === "calendario" && <CalendarSection tasks={tasks} plants={plants} garden={garden} setSelectedPlantId={setSelectedPlantId} bitacora={bitacora} gardens={gardens} />}
-                  {activeSection === "bitacora" && <BitacoraSection bitacora={bitacora} addBitacoraLogEntry={addBitacoraLogEntry} gardens={gardens} plants={gardenPlants} setSelectedPlantId={setSelectedPlantId} activeGarden={activeGarden} />}
+                  {activeSection === "bitacora" && <BitacoraSection bitacora={bitacora} addBitacoraLogEntry={addBitacoraLogEntry} updateBitacoraEntry={updateBitacoraEntry} gardens={gardens} plants={gardenPlants} setSelectedPlantId={setSelectedPlantId} activeGarden={activeGarden} autoOpenAdd={autoOpenAdd} setAutoOpenAdd={setAutoOpenAdd} />}
                   {activeSection === "diseno" && <DesignSection garden={garden} gardens={gardens} setGardens={setGardens} plants={gardenPlants} encyclopediaPlants={encyclopediaPlants} promoteToGarden={promoteToGarden} setSelectedPlantId={setSelectedPlantId} activeGarden={activeGarden} supabase={supabase} setSaving={setSaving} />}
                   {activeSection === "enciclopedia" && <EncyclopediaSection plants={encyclopediaPlants} setPlants={setPlants} setSelectedPlantId={setSelectedPlantId} supabase={supabase} setSaving={setSaving} />}
                   {activeSection === "plagas" && <PestsSection pests={pests} setPests={setPests} plants={gardenPlants} garden={garden} setSelectedPlantId={setSelectedPlantId} supabase={supabase} addPest={addPest} setSaving={setSaving} autoOpenAdd={autoOpenAdd} setAutoOpenAdd={setAutoOpenAdd} />}
@@ -542,25 +613,14 @@ export default function JardinApp() {
 // ─────────────────────────────────────────────────────────────
 // HOME
 // ─────────────────────────────────────────────────────────────
-function HomeSection({ plants, garden, gardens, tasks, addTask, addBitacoraEntry, addPest, setActiveSection, setAutoOpenAdd, activeGarden }) {
+function HomeSection({ garden, setActiveSection, setAutoOpenAdd }) {
   const season = getCurrentSeason();
   const monthIdx = new Date().getMonth();
   const guruThisMonth = GURU_CALENDAR[monthIdx] || [];
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [quickModal, setQuickModal] = useState(null); // 'tarea' | 'observacion' | 'plaga' | 'nota'
 
-  const REGISTER_OPTIONS = [
-    { id: "tarea", label: "Tarea", icon: "✅" },
-    { id: "planta", label: "Planta nueva", icon: "🌿" },
-    { id: "observacion", label: "Observación", icon: "🔎" },
-    { id: "plaga", label: "Plaga", icon: "🐛" },
-    { id: "nota", label: "Nota de calendario", icon: "📓" },
-  ];
-
-  const selectOption = (id) => {
-    setMenuOpen(false);
-    if (id === "planta") { setActiveSection("plantas"); setAutoOpenAdd(true); return; }
-    setQuickModal(id);
+  const openRegister = () => {
+    setActiveSection("bitacora");
+    setAutoOpenAdd(true);
   };
 
   return (
@@ -588,171 +648,12 @@ function HomeSection({ plants, garden, gardens, tasks, addTask, addBitacoraEntry
         }
       </div>
 
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "40px 0", position: "relative" }}>
-        <button className="btn-primary" onClick={() => setMenuOpen(v => !v)}
+      <div style={{ display: "flex", justifyContent: "center", padding: "40px 0" }}>
+        <button className="btn-primary" onClick={openRegister}
           style={{ fontSize: 17, padding: "16px 36px", borderRadius: 40, boxShadow: "0 4px 16px rgba(74,122,42,0.3)" }}>
           ＋ Registrar
         </button>
-        {menuOpen && (
-          <div style={{ position: "absolute", top: "calc(100% - 10px)", background: "#fff", border: "1px solid #e0d8c8", borderRadius: 12, boxShadow: "0 8px 24px rgba(0,0,0,0.12)", overflow: "hidden", minWidth: 220, zIndex: 60 }}>
-            {REGISTER_OPTIONS.map(opt => (
-              <button key={opt.id} onClick={() => selectOption(opt.id)}
-                style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "12px 18px", background: "none", border: "none", borderBottom: "1px solid #f5f0e8", cursor: "pointer", fontSize: 14, fontFamily: "inherit", textAlign: "left", color: "#2c2416" }}>
-                <span style={{ fontSize: 18 }}>{opt.icon}</span>{opt.label}
-              </button>
-            ))}
-          </div>
-        )}
       </div>
-
-      {quickModal && (
-        <QuickRegisterModal
-          type={quickModal}
-          plants={plants}
-          gardens={gardens}
-          activeGarden={activeGarden}
-          addTask={addTask}
-          addBitacoraEntry={addBitacoraEntry}
-          addPest={addPest}
-          onClose={() => setQuickModal(null)}
-        />
-      )}
-    </div>
-  );
-}
-
-function QuickRegisterModal({ type, plants, gardens, activeGarden, addTask, addBitacoraEntry, addPest, onClose }) {
-  const today = new Date().toISOString().slice(0, 10);
-  const taskTypes_es = { poda: "✂️", riego: "💧", fertilización: "🌾", siembra: "🌱", trasplante: "🪴", cosecha: "🧺", tratamiento: "💊", observación: "🔍", otro: "📝", raleo: "➖", limpieza: "🧹", plantación: "🌳", "control de plagas": "🐛" };
-  const [taskForm, setTaskForm] = useState({ plantId: plants[0]?.id || "", type: "observación", date: today, note: "" });
-  const [noteForm, setNoteForm] = useState({ date: today, category: type === "nota" ? "otro" : "observación general", text: "", gardenId: activeGarden || "", plantId: "" });
-  const [pestForm, setPestForm] = useState({ plantId: plants[0]?.id || "", name: "", date: today, treatment: "" });
-
-  const titles = { tarea: "Registrar tarea", observacion: "Registrar observación", plaga: "Registrar plaga", nota: "Nota de calendario" };
-
-  const handleSubmit = () => {
-    if (type === "tarea") {
-      if (!taskForm.plantId) return;
-      addTask({ plantId: taskForm.plantId, gardenId: activeGarden, bedId: "", type: taskForm.type, date: taskForm.date, note: taskForm.note });
-    } else if (type === "observacion" || type === "nota") {
-      if (!noteForm.text.trim()) return;
-      addBitacoraEntry(noteForm);
-    } else if (type === "plaga") {
-      if (!pestForm.name.trim() || !pestForm.plantId) return;
-      addPest(pestForm);
-    }
-    onClose();
-  };
-
-  return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(44,36,22,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100, padding: 16 }} onClick={onClose}>
-      <div className="card" style={{ maxWidth: 440, width: "100%", borderLeft: "4px solid #4a7a2a" }} onClick={e => e.stopPropagation()}>
-        <div className="section-title">{titles[type]}</div>
-
-        {type === "tarea" && (
-          <>
-            <label>Planta</label>
-            <select value={taskForm.plantId} onChange={e => setTaskForm(f => ({ ...f, plantId: e.target.value }))} style={{ marginBottom: 10 }}>
-              {plants.map(p => <option key={p.id} value={p.id}>{p.emoji} {p.name}</option>)}
-            </select>
-            <label>Tipo</label>
-            <select value={taskForm.type} onChange={e => setTaskForm(f => ({ ...f, type: e.target.value }))} style={{ marginBottom: 10 }}>
-              {TASK_TYPES.map(t => <option key={t} value={t}>{taskTypes_es[t] || "📝"} {t}</option>)}
-            </select>
-            <label>Fecha</label>
-            <input type="date" value={taskForm.date} onChange={e => setTaskForm(f => ({ ...f, date: e.target.value }))} style={{ marginBottom: 10 }} />
-            <label>Nota</label>
-            <textarea rows={2} value={taskForm.note} onChange={e => setTaskForm(f => ({ ...f, note: e.target.value }))} placeholder="¿Qué observaste?" style={{ marginBottom: 10 }} />
-          </>
-        )}
-
-        {(type === "observacion" || type === "nota") && (
-          <>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <div><label>Fecha</label><input type="date" value={noteForm.date} onChange={e => setNoteForm(f => ({ ...f, date: e.target.value }))} /></div>
-              <div><label>Categoría</label>
-                <select value={noteForm.category} onChange={e => setNoteForm(f => ({ ...f, category: e.target.value }))}>
-                  {BITACORA_CATEGORIES.map(c => <option key={c} value={c}>{BITACORA_CATEGORY_ICON[c]} {c}</option>)}
-                </select>
-              </div>
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
-              <div><label>Jardín</label>
-                <select value={noteForm.gardenId} onChange={e => setNoteForm(f => ({ ...f, gardenId: e.target.value }))}>
-                  <option value="">🌍 General</option>
-                  {gardens.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
-                </select>
-              </div>
-              <div><label>Planta (opcional)</label>
-                <select value={noteForm.plantId} onChange={e => setNoteForm(f => ({ ...f, plantId: e.target.value }))}>
-                  <option value="">— Sin planta —</option>
-                  {plants.map(p => <option key={p.id} value={p.id}>{p.emoji} {p.name}</option>)}
-                </select>
-              </div>
-            </div>
-            <label style={{ marginTop: 10 }}>Texto</label>
-            <textarea rows={3} value={noteForm.text} onChange={e => setNoteForm(f => ({ ...f, text: e.target.value }))} placeholder="¿Qué observaste?" style={{ marginBottom: 10 }} />
-          </>
-        )}
-
-        {type === "plaga" && (
-          <>
-            <label>Planta</label>
-            <select value={pestForm.plantId} onChange={e => setPestForm(f => ({ ...f, plantId: e.target.value }))} style={{ marginBottom: 10 }}>
-              {plants.map(p => <option key={p.id} value={p.id}>{p.emoji} {p.name}</option>)}
-            </select>
-            <label>Plaga</label>
-            <input type="text" value={pestForm.name} onChange={e => setPestForm(f => ({ ...f, name: e.target.value }))} placeholder="Mosca blanca, pulgón…" style={{ marginBottom: 10 }} />
-            <label>Fecha</label>
-            <input type="date" value={pestForm.date} onChange={e => setPestForm(f => ({ ...f, date: e.target.value }))} style={{ marginBottom: 10 }} />
-            <label>Tratamiento</label>
-            <textarea rows={2} value={pestForm.treatment} onChange={e => setPestForm(f => ({ ...f, treatment: e.target.value }))} style={{ marginBottom: 10 }} />
-          </>
-        )}
-
-        <div style={{ display: "flex", gap: 10, marginTop: 6 }}>
-          <button className="btn-primary" onClick={handleSubmit}>Guardar</button>
-          <button className="btn-secondary" onClick={onClose}>Cancelar</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────
-// COMPAT FIELD — lista de nombres (texto libre o plantas existentes)
-// ─────────────────────────────────────────────────────────────
-function CompatField({ values, onChange, suggestions, tone, listId }) {
-  const [draft, setDraft] = useState("");
-  const colors = tone === "good" ? { bg: "#e8f0d8", fg: "#4a7a2a" } : { bg: "#fde4dc", fg: "#c04020" };
-
-  const add = () => {
-    const v = draft.trim();
-    if (!v) return;
-    if (!values.some(x => normalizeText(x) === normalizeText(v))) onChange([...values, v]);
-    setDraft("");
-  };
-
-  return (
-    <div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: values.length ? 6 : 0 }}>
-        {values.map(v => (
-          <span key={v} className="badge" style={{ background: colors.bg, color: colors.fg, display: "inline-flex", alignItems: "center", gap: 4 }}>
-            {v}
-            <span onClick={() => onChange(values.filter(x => x !== v))} style={{ cursor: "pointer", fontWeight: 700 }}>×</span>
-          </span>
-        ))}
-      </div>
-      <div style={{ display: "flex", gap: 8 }}>
-        <input list={listId} value={draft} onChange={e => setDraft(e.target.value)}
-          onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); add(); } }}
-          placeholder="Buscá una planta o escribí libremente…"
-          style={{ width: "100%", background: "#faf8f3", border: "1px solid #ddd4c0", borderRadius: 8, padding: "9px 12px", fontSize: 14, color: "#2c2416", outline: "none", fontFamily: "inherit" }} />
-        <button type="button" className="btn-secondary" onClick={add}>＋</button>
-      </div>
-      <datalist id={listId}>
-        {suggestions.map(n => <option key={n} value={n} />)}
-      </datalist>
     </div>
   );
 }
@@ -760,7 +661,7 @@ function CompatField({ values, onChange, suggestions, tone, listId }) {
 // ─────────────────────────────────────────────────────────────
 // MULTI PICK — selección múltiple con chips + nombres nuevos escritos a mano
 // ─────────────────────────────────────────────────────────────
-function MultiPick({ options, selected, onToggle, newNames, onNewNamesChange, placeholder, emptyText, disabledNew, disabledNewText }) {
+function MultiPick({ options, selected, onToggle, newNames, onNewNamesChange, placeholder, emptyText, disabledNew, disabledNewText, hideNew }) {
   const [draft, setDraft] = useState("");
 
   const addNew = () => {
@@ -794,12 +695,14 @@ function MultiPick({ options, selected, onToggle, newNames, onNewNamesChange, pl
         ))}
         {options.length === 0 && newNames.length === 0 && emptyText && <span style={{ fontSize: 13, color: "#8a7a5a" }}>{emptyText}</span>}
       </div>
-      <div style={{ display: "flex", gap: 8 }}>
-        <input type="text" value={draft} disabled={disabledNew} onChange={e => setDraft(e.target.value)}
-          onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addNew(); } }}
-          placeholder={disabledNew ? disabledNewText : placeholder} style={{ flex: 1 }} />
-        <button type="button" className="btn-secondary" disabled={disabledNew} onClick={addNew}>＋</button>
-      </div>
+      {!hideNew && (
+        <div style={{ display: "flex", gap: 8 }}>
+          <input type="text" value={draft} disabled={disabledNew} onChange={e => setDraft(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addNew(); } }}
+            placeholder={disabledNew ? disabledNewText : placeholder} style={{ flex: 1 }} />
+          <button type="button" className="btn-secondary" disabled={disabledNew} onClick={addNew}>＋</button>
+        </div>
+      )}
     </div>
   );
 }
@@ -2100,7 +2003,7 @@ function CalendarSection({ tasks, plants, garden, setSelectedPlantId, bitacora =
             ? <p style={{ color: "#8a7a5a", fontSize: 14 }}>Sin anotaciones para este mes.</p>
             : monthBitacora.map(b => {
               const g = gardens.find(gd => gd.id === b.gardenId);
-              const pl = plants.find(p => p.id === b.plantId);
+              const linked = (b.plantIds || []).map(id => plants.find(p => p.id === id)).filter(Boolean);
               return (
                 <div key={b.id} style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 10, paddingBottom: 10, borderBottom: "1px solid #f0e8d8" }}>
                   <span style={{ fontSize: 18 }}>{BITACORA_CATEGORY_ICON[b.category] || "📝"}</span>
@@ -2108,7 +2011,7 @@ function CalendarSection({ tasks, plants, garden, setSelectedPlantId, bitacora =
                     <div style={{ fontSize: 13, color: "#4a3a2a" }}>{b.text}</div>
                     <div style={{ fontSize: 11, color: "#aaa090", marginTop: 2 }}>
                       {b.date} · {g ? `🌿 ${g.name}` : "🌍 General"}
-                      {pl && <> · <span className="plant-link" onClick={() => setSelectedPlantId(pl.id)}>{pl.emoji} {pl.name}</span></>}
+                      {linked.map(pl => <span key={pl.id}> · <span className="plant-link" onClick={() => setSelectedPlantId(pl.id)}>{pl.emoji} {pl.name}</span></span>)}
                     </div>
                   </div>
                 </div>
@@ -2124,8 +2027,28 @@ function CalendarSection({ tasks, plants, garden, setSelectedPlantId, bitacora =
 // ─────────────────────────────────────────────────────────────
 // BITÁCORA SECTION
 // ─────────────────────────────────────────────────────────────
-function BitacoraSection({ bitacora, addBitacoraLogEntry, gardens, plants = [], setSelectedPlantId, activeGarden }) {
+function BitacoraSection({ bitacora, addBitacoraLogEntry, updateBitacoraEntry, gardens, plants = [], setSelectedPlantId, activeGarden, autoOpenAdd, setAutoOpenAdd }) {
   const [showAdd, setShowAdd] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [editForm, setEditForm] = useState(null);
+
+  useEffect(() => {
+    if (autoOpenAdd) {
+      setShowAdd(true);
+      setAutoOpenAdd(false);
+    }
+  }, [autoOpenAdd, setAutoOpenAdd]);
+
+  const startEdit = (b) => {
+    setEditingId(b.id);
+    setEditForm({ text: b.text, date: b.date, category: b.category, plantIds: b.plantIds });
+  };
+  const toggleEditPlant = (id) => setEditForm(f => ({ ...f, plantIds: f.plantIds.includes(id) ? f.plantIds.filter(x => x !== id) : [...f.plantIds, id] }));
+  const saveEdit = async () => {
+    if (!editForm.text.trim()) return;
+    const ok = await updateBitacoraEntry(editingId, editForm);
+    if (ok) { setEditingId(null); setEditForm(null); }
+  };
   const emptyLog = { date: new Date().toISOString().slice(0, 10), gardenId: activeGarden || "", text: "", plantIds: [], newPlantNames: [], bedIds: [], newBedNames: [], taskTypes: [] };
   const [log, setLog] = useState(emptyLog);
   const [filterCat, setFilterCat] = useState("todas");
@@ -2139,14 +2062,17 @@ function BitacoraSection({ bitacora, addBitacoraLogEntry, gardens, plants = [], 
 
   const handleAdd = async () => {
     if (!log.text.trim()) return;
-    await addBitacoraLogEntry(log);
-    setLog({ ...emptyLog, gardenId: log.gardenId });
-    setShowAdd(false);
+    const ok = await addBitacoraLogEntry(log);
+    if (ok) {
+      setLog({ ...emptyLog, gardenId: log.gardenId });
+      setShowAdd(false);
+    }
   };
 
   const sorted = bitacora.slice().sort((a, b) => b.date.localeCompare(a.date));
   const filtered = filterCat === "todas" ? sorted : sorted.filter(b => b.category === filterCat);
-  const taskCount = log.plantIds.length * log.taskTypes.length;
+  const totalPlants = log.plantIds.length + log.newPlantNames.length;
+  const taskCount = totalPlants * log.taskTypes.length;
 
   return (
     <div>
@@ -2211,9 +2137,11 @@ function BitacoraSection({ bitacora, addBitacoraLogEntry, gardens, plants = [], 
             </div>
           </div>
 
-          {taskCount > 0 && (
-            <div style={{ fontSize: 13, color: "#4a7a2a", marginBottom: 12 }}>
-              ✅ Se van a crear {taskCount} tarea{taskCount === 1 ? "" : "s"} ({log.plantIds.length} planta{log.plantIds.length === 1 ? "" : "s"} × {log.taskTypes.length} tipo{log.taskTypes.length === 1 ? "" : "s"}) además de guardar la anotación.
+          {(taskCount > 0 || log.newPlantNames.length > 0 || (log.newBedNames.length > 0 && log.gardenId)) && (
+            <div style={{ fontSize: 13, color: "#4a7a2a", marginBottom: 12, lineHeight: 1.6 }}>
+              {taskCount > 0 && <div>✅ Se van a crear {taskCount} tarea{taskCount === 1 ? "" : "s"} ({totalPlants} planta{totalPlants === 1 ? "" : "s"} × {log.taskTypes.length} tipo{log.taskTypes.length === 1 ? "" : "s"}).</div>}
+              {log.newPlantNames.length > 0 && <div>🌱 Se {log.newPlantNames.length === 1 ? "va a crear 1 planta nueva" : `van a crear ${log.newPlantNames.length} plantas nuevas`} en estado "en tierra"{log.bedIds.length + log.newBedNames.length > 0 ? ", ubicada" + (log.newPlantNames.length === 1 ? "" : "s") + " en los canteros elegidos" : ""}.</div>}
+              {log.newBedNames.length > 0 && log.gardenId && <div>📐 Se {log.newBedNames.length === 1 ? "va a crear 1 cantero nuevo" : `van a crear ${log.newBedNames.length} canteros nuevos`} en {logGarden?.name}.</div>}
             </div>
           )}
 
@@ -2236,7 +2164,41 @@ function BitacoraSection({ bitacora, addBitacoraLogEntry, gardens, plants = [], 
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         {filtered.map(b => {
           const g = gardens.find(gd => gd.id === b.gardenId);
-          const pl = plants.find(p => p.id === b.plantId);
+          const linkedPlants = b.plantIds.map(id => plants.find(p => p.id === id)).filter(Boolean);
+          const bedNames = (g?.beds || []).filter(bd => (b.bedIds || []).includes(bd.id)).map(bd => bd.name);
+
+          if (editingId === b.id && editForm) {
+            return (
+              <div key={b.id} className="card" style={{ borderLeft: "4px solid #8ab860" }}>
+                <div className="section-title">Editar anotación</div>
+                <textarea rows={4} value={editForm.text} onChange={e => setEditForm(f => ({ ...f, text: e.target.value }))} style={{ marginBottom: 12, fontSize: 15 }} />
+                <div className="grid-3" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+                  <div><label>Fecha</label><input type="date" value={editForm.date} onChange={e => setEditForm(f => ({ ...f, date: e.target.value }))} /></div>
+                  <div><label>Categoría</label>
+                    <select value={editForm.category} onChange={e => setEditForm(f => ({ ...f, category: e.target.value }))}>
+                      {BITACORA_CATEGORIES.map(c => <option key={c} value={c}>{BITACORA_CATEGORY_ICON[c]} {c}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div style={{ marginBottom: 12 }}>
+                  <label>🌿 Plantas involucradas</label>
+                  <MultiPick
+                    options={plants.map(p => ({ id: p.id, label: `${p.emoji} ${p.name}`.trim(), name: p.name }))}
+                    selected={editForm.plantIds}
+                    onToggle={toggleEditPlant}
+                    newNames={[]}
+                    onNewNamesChange={() => {}}
+                    hideNew
+                  />
+                </div>
+                <div style={{ display: "flex", gap: 10 }}>
+                  <button className="btn-primary" onClick={saveEdit}>Guardar cambios</button>
+                  <button className="btn-secondary" onClick={() => { setEditingId(null); setEditForm(null); }}>Cancelar</button>
+                </div>
+              </div>
+            );
+          }
+
           return (
             <div key={b.id} className="card">
               <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
@@ -2246,10 +2208,17 @@ function BitacoraSection({ bitacora, addBitacoraLogEntry, gardens, plants = [], 
                     <span className="badge" style={{ background: "#e8f0d8", color: "#4a7a2a" }}>{b.category}</span>
                     <span style={{ fontSize: 12, color: "#aaa090" }}>{b.date}</span>
                     <span style={{ fontSize: 12, color: "#8a7a5a" }}>{g ? `🌿 ${g.name}` : "🌍 General"}</span>
-                    {pl && <span className="plant-link" onClick={() => setSelectedPlantId(pl.id)} style={{ fontSize: 12 }}>{pl.emoji} {pl.name}</span>}
+                    {bedNames.length > 0 && <span style={{ fontSize: 12, color: "#8a7a5a" }}>📐 {bedNames.join(", ")}</span>}
+                    {linkedPlants.map(pl => <span key={pl.id} className="plant-link" onClick={() => setSelectedPlantId(pl.id)} style={{ fontSize: 12 }}>{pl.emoji} {pl.name}</span>)}
                   </div>
                   <p style={{ margin: "6px 0 0", fontSize: 14, color: "#4a3a2a", lineHeight: 1.6 }}>{b.text}</p>
+                  {(b.taskTypes || []).length > 0 && (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 8 }}>
+                      {b.taskTypes.map(t => <span key={t} className="tag">{BITACORA_TASK_TYPE_ICON[t] || "📝"} {t}</span>)}
+                    </div>
+                  )}
                 </div>
+                <button className="btn-secondary" style={{ fontSize: 12, padding: "4px 10px" }} onClick={() => startEdit(b)}>✏️ Editar</button>
               </div>
             </div>
           );
