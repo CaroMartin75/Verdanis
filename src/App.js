@@ -659,6 +659,44 @@ function HomeSection({ garden, setActiveSection, setAutoOpenAdd }) {
 }
 
 // ─────────────────────────────────────────────────────────────
+// COMPAT FIELD — lista de nombres (texto libre o plantas existentes)
+// ─────────────────────────────────────────────────────────────
+function CompatField({ values, onChange, suggestions, tone, listId }) {
+  const [draft, setDraft] = useState("");
+  const colors = tone === "good" ? { bg: "#e8f0d8", fg: "#4a7a2a" } : { bg: "#fde4dc", fg: "#c04020" };
+
+  const add = () => {
+    const v = draft.trim();
+    if (!v) return;
+    if (!values.some(x => normalizeText(x) === normalizeText(v))) onChange([...values, v]);
+    setDraft("");
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: values.length ? 6 : 0 }}>
+        {values.map(v => (
+          <span key={v} className="badge" style={{ background: colors.bg, color: colors.fg, display: "inline-flex", alignItems: "center", gap: 4 }}>
+            {v}
+            <span onClick={() => onChange(values.filter(x => x !== v))} style={{ cursor: "pointer", fontWeight: 700 }}>×</span>
+          </span>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <input list={listId} value={draft} onChange={e => setDraft(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); add(); } }}
+          placeholder="Buscá una planta o escribí libremente…"
+          style={{ width: "100%", background: "#faf8f3", border: "1px solid #ddd4c0", borderRadius: 8, padding: "9px 12px", fontSize: 14, color: "#2c2416", outline: "none", fontFamily: "inherit" }} />
+        <button type="button" className="btn-secondary" onClick={add}>＋</button>
+      </div>
+      <datalist id={listId}>
+        {suggestions.map(n => <option key={n} value={n} />)}
+      </datalist>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
 // MULTI PICK — selección múltiple con chips + nombres nuevos escritos a mano
 // ─────────────────────────────────────────────────────────────
 function MultiPick({ options, selected, onToggle, newNames, onNewNamesChange, placeholder, emptyText, disabledNew, disabledNewText, hideNew }) {
