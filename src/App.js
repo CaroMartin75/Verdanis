@@ -296,7 +296,7 @@ export default function JardinApp() {
         setRecords((r.data || []).map(dbToRecord));
         setPests((pe.data || []).map(dbToPest));
         setBitacora((bt.data || []).map(dbToBitacora));
-        setGuruRows((gu.data || []).filter(row => row.action));
+        setGuruRows((gu.data || []).filter(row => row.titulo || row.descripcion).sort((a, b) => (Number(a.prioridad) || 99) - (Number(b.prioridad) || 99)));
         if (g.data && g.data.length > 0) {
           const def = g.data.find(x => x.is_default) || g.data[0];
           setActiveGarden(def.id);
@@ -821,9 +821,9 @@ function HomeSection({ garden, gardens, plants, encyclopediaPlants, tasks, activ
             <p style={emptyMsg}>Los gurús todavía no cargaron recomendaciones para {monthName}. Mientras tanto, tu Bitácora es la mejor fuente: anotá lo que ves y hacés este mes.</p>
           ) : gurus.map((g, i) => (
             <div key={g.id ?? i} style={{ marginBottom: i < gurus.length - 1 ? 12 : 0 }}>
-              {g.plant && <div style={{ fontWeight: 600, fontSize: 14, color: "#3a5a80" }}>🌿 {g.plant}</div>}
-              <div style={{ fontSize: 13, marginTop: 2 }}>{g.action}</div>
-              {g.source && <div style={{ fontSize: 11, color: "#aaa090" }}>Fuente: {g.source}</div>}
+              {g.titulo && <div style={{ fontWeight: 600, fontSize: 14, color: "#3a5a80" }}>🌿 {g.titulo}{g.categoria && <span className="tag" style={{ marginLeft: 8 }}>{g.categoria}</span>}</div>}
+              {g.descripcion && <div style={{ fontSize: 13, marginTop: 2, lineHeight: 1.5 }}>{g.descripcion}</div>}
+              {g.fuente && <div style={{ fontSize: 11, color: "#aaa090" }}>Fuente: {g.fuente}</div>}
             </div>
           ))}
         </div>
@@ -2380,9 +2380,9 @@ function CalendarSection({ tasks, plants, garden, setSelectedPlantId, bitacora =
             ? <p style={{ color: "#8a7a5a", fontSize: 14 }}>Sin recomendaciones este mes.</p>
             : guruThisMonth.map((g, i) => (
               <div key={i} style={{ marginBottom: 14 }}>
-                {g.plant && <div style={{ fontWeight: 600, fontSize: 14, color: "#3a5a80" }}>🌿 {g.plant}</div>}
-                <div style={{ fontSize: 13, marginTop: 4 }}>{g.action}</div>
-                {g.source && <div style={{ fontSize: 11, color: "#aaa090" }}>Fuente: {g.source}</div>}
+                {g.titulo && <div style={{ fontWeight: 600, fontSize: 14, color: "#3a5a80" }}>🌿 {g.titulo}{g.categoria && <span className="tag" style={{ marginLeft: 8 }}>{g.categoria}</span>}</div>}
+                {g.descripcion && <div style={{ fontSize: 13, marginTop: 4, lineHeight: 1.5 }}>{g.descripcion}</div>}
+                {g.fuente && <div style={{ fontSize: 11, color: "#aaa090" }}>Fuente: {g.fuente}</div>}
               </div>
             ))
           )}
