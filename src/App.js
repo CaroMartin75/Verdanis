@@ -35,7 +35,7 @@ const SEED_PESTS = [
 ];
 
 const MONTHS = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
-const TASK_TYPES = ["riego","poda","fertilización","siembra","trasplante","cosecha","tratamiento","observación","otro"];
+const TASK_TYPES = ["riego","poda","fertilización","siembra","trasplante","cosecha","tratamiento","observación","limpieza","otro"];
 const LIFECYCLE_LABEL = { anual: "🌱 Anual", bianual: "🌿 Bianual", perenne: "🌳 Perenne" };
 const BITACORA_CATEGORIES = ["clima", "flora silvestre", "fauna", "comunidad", "observación general", "otro"];
 const BITACORA_CATEGORY_ICON = { clima: "🌦", "flora silvestre": "🌼", fauna: "🐝", comunidad: "🏘️", "observación general": "🔎", otro: "📝" };
@@ -151,6 +151,66 @@ function encodeMentions(text, mentions) {
     }
   });
   return { stored: out, used };
+}
+
+// ── Tareas inferidas del texto ───────────────────────────────
+// Para ampliar la detección alcanza con agregar palabras a una lista (o un tipo nuevo).
+// Se ignoran tildes y mayúsculas. El tipo debe coincidir con los tipos de tarea de la app.
+const TASK_KEYWORDS = {
+  riego: ["regué", "regamos", "regó", "riego"],
+  poda: ["podé", "podamos", "podó", "poda"],
+  trasplante: ["trasplanté", "trasplantamos", "trasplantó", "trasplante"],
+  fertilización: ["fertilicé", "fertilizamos", "fertilizó", "fertilización"],
+  siembra: ["sembré", "sembramos", "sembró", "siembra"],
+  limpieza: ["desherbé", "desherbamos", "desherbado", "desmalezé", "desmalezamos", "desmalezado"],
+};
+const TASK_KEYWORD_RULES = Object.entries(TASK_KEYWORDS).flatMap(([type, words]) =>
+  words.map(w => ({ type, re: new RegExp(`(^|[^a-z0-9])${normalizeText(w)}(?![a-z0-9])`, "g") }))
+);
+
+// Recibe el texto guardado (con @[Etiqueta](p:ID)) y devuelve [{ type, plantId, plantLabel, bedId, note }].
+// Cada palabra clave se aplica a las plantas mencionadas después de ella en la misma oración (hasta la
+// siguiente palabra clave); si no hay, a las mencionadas antes, y si tampoco, a las que vengan después
+// en la oración ("regué y desherbé @Tomate"). Una mención de cantero en la oración
+// se guarda como cantero de la tarea. "no regué" no cuenta.
+function inferTasks(stored) {
+  const refs = [];
+  const masked = (stored || "").replace(new RegExp(MENTION_SRC, "g"), (m, label, type, id) => {
+    refs.push({ type, id, label });
+    return `\u0001${refs.length - 1}\u0002`;
+  });
+  const out = [];
+  const seen = new Set();
+  masked.split(/[.!?\n;]+/).forEach(sentence => {
+    const norm = normalizeText(sentence);
+    const holders = [...norm.matchAll(/\u0001(\d+)\u0002/g)].map(m => ({ pos: m.index, ref: refs[Number(m[1])] }));
+    if (!holders.length) return;
+    const kws = [];
+    TASK_KEYWORD_RULES.forEach(rule => {
+      for (const m of norm.matchAll(rule.re)) {
+        const idx = m.index + m[1].length;
+        const before = norm.slice(0, idx);
+        if (/(^|[^a-z])(no|nunca|ni)\s+(\S+\s+)?$/.test(before)) continue;
+        kws.push({ type: rule.type, idx });
+      }
+    });
+    kws.sort((a, b) => a.idx - b.idx);
+    const plain = sentence.replace(/\u0001(\d+)\u0002/g, (m, n) => "@" + refs[Number(n)].label).trim();
+    const bedId = (holders.find(h => h.ref.type === "b") || {}).ref?.id || "";
+    kws.forEach((kw, i) => {
+      const end = i + 1 < kws.length ? kws[i + 1].idx : norm.length;
+      let targets = holders.filter(h => h.pos > kw.idx && h.pos < end);
+      if (!targets.length) targets = holders.filter(h => h.pos < kw.idx);
+      if (!targets.length) targets = holders.filter(h => h.pos > kw.idx);
+      targets.filter(h => h.ref.type === "p").forEach(h => {
+        const key = h.ref.id + "|" + kw.type;
+        if (seen.has(key)) return;
+        seen.add(key);
+        out.push({ type: kw.type, plantId: h.ref.id, plantLabel: h.ref.label, bedId, note: plain });
+      });
+    });
+  });
+  return out;
 }
 
 // Muestra el texto de una entrada con las menciones resaltadas (y clickeables si se pasa onPlant).
@@ -442,30 +502,30 @@ export default function JardinApp() {
   // - crea los canteros nuevos en el jardín elegido
   // - crea una tarea por cada combinación planta × tipo de tarea
   // Devuelve true si todo se guardó.
-  const addBitacoraLogEntry = async ({ text: rawText, date, photoFile, mentions = [], newPlantNames = [], newBedNames = [], taskTypes = [] }) => {
+  const addBitacoraLogEntry = async ({ text: rawText, date, photoFile, mentions = [], createTasks = true }) => {
     setSaving(true);
     try {
       const stamp = Date.now();
       const gardenId = activeGarden;
-      const { stored: text, used } = encodeMentions(rawText, mentions);
-      const plantIds = used.filter(m => m.type === "p").map(m => m.id);
-      const bedIds = used.filter(m => m.type === "b").map(m => m.id);
+      const gardenObj = gardens.find(g => g.id === gardenId);
       const photoUrl = photoFile ? await uploadPhoto(photoFile, "bitacora") : "";
 
-      // Plantas nuevas: si el nombre coincide con una ficha existente (p. ej. de la enciclopedia) se reutiliza.
-      const resolvedPlantIds = [...plantIds];
+      // Menciones que siguen en el texto. Las "nuevas" (np / nb) se resuelven acá: si ya existe una
+      // planta (p. ej. en la enciclopedia) o un cantero con ese nombre se reutiliza; si no, se crea.
+      const present = mentions.filter(m => rawText.includes("@" + m.label));
       const plantsToCreate = [];
       const plantsToPromote = [];
-      newPlantNames.forEach((name, i) => {
-        const match = plants.find(p => normalizeText(p.name) === normalizeText(name));
-        if (match) {
-          if (!resolvedPlantIds.includes(match.id)) resolvedPlantIds.push(match.id);
-          if (!match.inGarden) plantsToPromote.push(match.id);
-        } else {
+      const createdBeds = [];
+      const resolved = present.map((m, i) => {
+        if (m.type === "np") {
+          const match = plants.find(pl => normalizeText(pl.name) === normalizeText(m.label));
+          if (match) {
+            if (!match.inGarden) plantsToPromote.push(match.id);
+            return { type: "p", id: match.id, label: m.label };
+          }
           const id = "p" + stamp + "_" + i;
-          resolvedPlantIds.push(id);
           plantsToCreate.push({
-            id, name, emoji: "🌿", family: "", description: "", offseason: "", substrate: "",
+            id, name: m.label, emoji: "🌿", family: "", description: "", offseason: "", substrate: "",
             lifecycle: "perenne", sunlight: "pleno sol", water_days: 0,
             height_min: 0, height_max: 0, diameter_min: 0, diameter_max: 0,
             flower_color: "#ffffff", foliage_color: "", leaf_shape: "", habit: "",
@@ -473,70 +533,54 @@ export default function JardinApp() {
             tags: [], role: [], plant_of_day: false, community_notes: [],
             in_garden: true, status: "en tierra", ai_suggested_fields: []
           });
+          return { type: "p", id, label: m.label };
         }
+        if (m.type === "nb") {
+          const bed = (gardenObj?.beds || []).find(b => normalizeText(b.name) === normalizeText(m.label));
+          if (bed) return { type: "b", id: bed.id, label: m.label };
+          const id = "b" + stamp + "_" + i;
+          createdBeds.push({ id, name: m.label, shape: "rect", w: 3, h: 2, plantIds: [] });
+          return { type: "b", id, label: m.label };
+        }
+        return m;
       });
+      const { stored: text, used } = encodeMentions(rawText, resolved);
+      const plantIds = used.filter(m => m.type === "p").map(m => m.id);
+      const bedIds = used.filter(m => m.type === "b").map(m => m.id);
+      const inferred = createTasks ? inferTasks(text) : [];
 
-      // Canteros: existentes elegidos + nuevos (solo si hay jardín).
-      const gardenObj = gardens.find(g => g.id === gardenId);
-      const createdBeds = gardenObj ? newBedNames.map((name, i) => ({ id: "b" + stamp + "_" + i, name, shape: "rect", w: 3, h: 2, plantIds: [] })) : [];
-      const allBedIds = [...bedIds, ...createdBeds.map(b => b.id)];
-      const newPlantIdsForBeds = plantsToCreate.map(p => p.id);
-      let finalBeds = null;
-      if (gardenObj && (createdBeds.length || (newPlantIdsForBeds.length && allBedIds.length))) {
-        finalBeds = [...(gardenObj.beds || []), ...createdBeds].map(b =>
-          allBedIds.includes(b.id) ? { ...b, plantIds: [...new Set([...(b.plantIds || []), ...newPlantIdsForBeds])] } : b
-        );
-      }
-
-      // 1) La entrada completa (primero: si falla, no se crea nada más).
+      // 1) La entrada (primero: si falla, no se crea nada más).
       const entry = {
         id: "bt" + stamp, date, category: "observación general", text,
         garden_id: gardenId || null, plant_id: null,
-        plant_ids: resolvedPlantIds, bed_ids: allBedIds, task_types: taskTypes,
+        plant_ids: plantIds, bed_ids: bedIds, task_types: [...new Set(inferred.map(t => t.type))],
         ...(photoUrl ? { photo_url: photoUrl } : {})
       };
       dbError(await supabase.from("bitacora").insert(entry), "No se pudo guardar la entrada");
       setBitacora(prev => [...prev, dbToBitacora(entry)]);
 
-      // 2) Plantas nuevas / promovidas.
+      // 2) Plantas nuevas / promovidas desde la enciclopedia.
       if (plantsToCreate.length) {
         dbError(await supabase.from("plants").insert(plantsToCreate), "No se pudieron crear las plantas nuevas");
         setPlants(prev => [...prev, ...plantsToCreate.map(dbToPlant)]);
       }
       for (const id of plantsToPromote) {
         dbError(await supabase.from("plants").update({ in_garden: true }).eq("id", id), "No se pudo sumar la planta al jardín");
-        setPlants(prev => prev.map(p => p.id === id ? { ...p, inGarden: true } : p));
+        setPlants(prev => prev.map(pl => pl.id === id ? { ...pl, inGarden: true } : pl));
       }
 
-      // 3) Canteros.
-      if (finalBeds) {
-        dbError(await supabase.from("gardens").update({ beds: finalBeds }).eq("id", gardenId), "No se pudieron guardar los canteros");
-        setGardens(prev => prev.map(g => g.id === gardenId ? { ...g, beds: finalBeds } : g));
+      // 3) Canteros nuevos en el jardín activo.
+      if (createdBeds.length && gardenObj) {
+        const beds = [...(gardenObj.beds || []), ...createdBeds];
+        dbError(await supabase.from("gardens").update({ beds }).eq("id", gardenId), "No se pudieron guardar los canteros");
+        setGardens(prev => prev.map(g => g.id === gardenId ? { ...g, beds } : g));
       }
 
-      // 4) Tareas (+ registros de evolución) por planta × tipo.
-      if (resolvedPlantIds.length && taskTypes.length) {
-        const bedForPlant = (plantId) => {
-          const beds = finalBeds || (gardenObj?.beds || []);
-          const hit = beds.find(b => allBedIds.includes(b.id) && (b.plantIds || []).includes(plantId));
-          return hit ? hit.id : (allBedIds[0] || "");
-        };
-        let i = 0;
-        const newTasks = [];
-        const newRecords = [];
-        resolvedPlantIds.forEach(plantId => {
-          taskTypes.forEach(type => {
-            i += 1;
-            newTasks.push({ id: "t" + stamp + "_" + i, plant_id: plantId, garden_id: gardenId || "", bed_id: bedForPlant(plantId), type, date, note: rawText, learned_pattern: true });
-            if (rawText) newRecords.push({ id: "r" + stamp + "_" + i, plant_id: plantId, garden_id: gardenId || "", date, text: "[" + type.toUpperCase() + "] " + rawText, evolution: "neutral" });
-          });
-        });
+      // 4) Tareas inferidas del texto: alimentan el calendario perpetuo.
+      if (inferred.length) {
+        const newTasks = inferred.map((t, i) => ({ id: "t" + stamp + "_" + (i + 1), plant_id: t.plantId, garden_id: gardenId || "", bed_id: t.bedId || "", type: t.type, date, note: t.note, learned_pattern: true }));
         dbError(await supabase.from("tasks").insert(newTasks), "No se pudieron crear las tareas");
         setTasks(prev => [...prev, ...newTasks.map(dbToTask)]);
-        if (newRecords.length) {
-          dbError(await supabase.from("records").insert(newRecords), "No se pudieron crear los registros de evolución");
-          setRecords(prev => [...prev, ...newRecords.map(dbToRecord)]);
-        }
       }
       return true;
     } catch (e) {
@@ -1028,16 +1072,17 @@ function SinglePhotoPicker({ file, url, onPick, onClear }) {
 // ─────────────────────────────────────────────────────────────
 // MENTION TEXTAREA — texto libre con menú de @menciones
 // ─────────────────────────────────────────────────────────────
-function MentionTextarea({ value, onChange, mentions, onMentionsChange, candidates, placeholder, rows = 7 }) {
+function MentionTextarea({ value, onChange, mentions, onMentionsChange, candidates, placeholder, rows = 7, allowCreate = false }) {
   const ref = useRef(null);
   const [menu, setMenu] = useState(null); // { start, query }
-  const [index, setIndex] = useState(0);
+  const [index, setIndex] = useState(null); // null = posición por defecto
 
   const detect = (text, caret) => {
     const m = /(^|\s)@([^@\n]{0,30})$/.exec(text.slice(0, caret));
     return m ? { start: caret - m[2].length - 1, query: m[2] } : null;
   };
   const words = menu ? normalizeText(menu.query).split(/\s+/).filter(Boolean) : [];
+
   // Primero lo que se llama como lo escrito, después lo que solo coincide por su ubicación.
   const rank = (c) => {
     const byName = normalizeText(c.name);
@@ -1045,17 +1090,27 @@ function MentionTextarea({ value, onChange, mentions, onMentionsChange, candidat
     if (words.every(w => byName.includes(w))) return 1;
     return 2;
   };
-  const items = menu ? candidates
+  const real = menu ? candidates
     .filter(c => { const hay = normalizeText(`${c.name} ${c.label} ${c.hint}`); return words.every(w => hay.includes(w)); })
     .map((c, i) => ({ c, i, r: rank(c) }))
     .sort((a, b) => a.r - b.r || a.i - b.i)
     .map(x => x.c)
     .slice(0, 8) : [];
 
+  // Opciones para crear lo que no existe (solo con nombre de 2+ letras, sin coincidencia exacta).
+  const typed = menu ? menu.query.replace(/[\]\n]/g, " ").trim() : "";
+  const exact = typed && candidates.some(c => normalizeText(c.name) === normalizeText(typed));
+  const creates = (allowCreate && menu && typed.length >= 2 && !/\s$/.test(menu.query) && !exact) ? [
+    { create: "np", name: typed, label: typed, icon: "🌱", text: `Crear "${typed}" como planta nueva` },
+    { create: "nb", name: typed, label: typed, icon: "📐", text: `Crear "${typed}" como cantero` },
+  ] : [];
+  const items = [...real, ...creates];
+  const cur = index === null ? (real.length ? 0 : -1) : Math.min(index, items.length - 1);
+
   const refresh = (text, caret) => {
     const next = detect(text, caret);
     setMenu(prev => (prev && next && prev.start === next.start && prev.query === next.query) ? prev : next);
-    if (!next || !menu || next.query !== menu.query) setIndex(0);
+    if (!next || !menu || next.query !== menu.query) setIndex(null);
   };
 
   const choose = (item) => {
@@ -1063,17 +1118,22 @@ function MentionTextarea({ value, onChange, mentions, onMentionsChange, candidat
     const before = value.slice(0, menu.start);
     const insert = "@" + item.label + " ";
     onChange(before + insert + value.slice(caret));
-    if (!mentions.some(m => m.id === item.id && m.type === item.type)) onMentionsChange([...mentions, { type: item.type, id: item.id, label: item.label }]);
+    const entry = item.create
+      ? { type: item.create, id: "new-" + item.create + "-" + normalizeText(item.label), label: item.label }
+      : { type: item.type, id: item.id, label: item.label };
+    if (!mentions.some(m => m.id === entry.id && m.type === entry.type)) onMentionsChange([...mentions, entry]);
     setMenu(null);
+    setIndex(null);
     setTimeout(() => { if (ref.current) { ref.current.focus(); const pos = (before + insert).length; ref.current.setSelectionRange(pos, pos); } }, 0);
   };
 
   const onKeyDown = (e) => {
-    if (!menu || items.length === 0) { if (menu && e.key === "Escape") setMenu(null); return; }
-    if (e.key === "ArrowDown") { e.preventDefault(); setIndex(i => (i + 1) % items.length); }
-    else if (e.key === "ArrowUp") { e.preventDefault(); setIndex(i => (i - 1 + items.length) % items.length); }
-    else if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); choose(items[Math.min(index, items.length - 1)]); }
-    else if (e.key === "Escape") { e.preventDefault(); setMenu(null); }
+    if (!menu) return;
+    if (e.key === "Escape") { e.preventDefault(); setMenu(null); return; }
+    if (items.length === 0) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); setIndex((cur + 1) % items.length); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setIndex((cur - 1 + items.length) % items.length); }
+    else if ((e.key === "Enter" || e.key === "Tab") && cur >= 0) { e.preventDefault(); choose(items[cur]); }
   };
 
   return (
@@ -1085,16 +1145,25 @@ function MentionTextarea({ value, onChange, mentions, onMentionsChange, candidat
         onBlur={() => setMenu(null)}
         style={{ fontSize: 15, lineHeight: 1.6, resize: "vertical" }} />
       {menu && (
-        <div style={{ position: "absolute", left: 0, right: 0, top: "100%", marginTop: 4, zIndex: 80, background: "#fff", border: "1px solid #e0d8c8", borderRadius: 10, boxShadow: "0 8px 24px rgba(0,0,0,0.14)", maxHeight: 280, overflowY: "auto" }}>
+        <div style={{ position: "absolute", left: 0, right: 0, top: "100%", marginTop: 4, zIndex: 80, background: "#fff", border: "1px solid #e0d8c8", borderRadius: 10, boxShadow: "0 8px 24px rgba(0,0,0,0.14)", maxHeight: 300, overflowY: "auto" }}>
           {items.length === 0
             ? <div style={{ padding: "10px 14px", fontSize: 13, color: "#8a7a5a" }}>Sin coincidencias para "@{menu.query}"</div>
             : items.map((it, i) => (
-              <div key={it.type + it.id} onMouseDown={e => { e.preventDefault(); choose(it); }} onMouseEnter={() => setIndex(i)}
-                style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 14px", cursor: "pointer", background: i === index ? "#eef4e0" : "#fff", borderBottom: "1px solid #f5f0e8" }}>
-                <span style={{ fontSize: 18 }}>{it.icon}</span>
-                <span style={{ fontSize: 14, fontWeight: 600, color: "#2c2416" }}>{it.name}</span>
-                {it.hint && <span style={{ fontSize: 12, color: "#9a8a6a" }}>— {it.hint}</span>}
-                {it.label !== it.name && it.label !== `${it.name} — ${it.hint}` && <span style={{ fontSize: 11, color: "#b8aa88", marginLeft: "auto" }}>@{it.label}</span>}
+              <div key={(it.create || it.type) + (it.id || it.label)} onMouseDown={e => { e.preventDefault(); choose(it); }} onMouseEnter={() => setIndex(i)}
+                style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 14px", cursor: "pointer", background: i === cur ? "#eef4e0" : "#fff", borderBottom: "1px solid #f5f0e8" }}>
+                {it.create ? (
+                  <>
+                    <span style={{ fontSize: 16 }}>➕</span>
+                    <span style={{ fontSize: 14, color: "#4a7a2a", fontWeight: 600 }}>{it.text}</span>
+                    <span style={{ fontSize: 16, marginLeft: "auto" }}>{it.icon}</span>
+                  </>
+                ) : (
+                  <>
+                    <span style={{ fontSize: 18 }}>{it.icon}</span>
+                    <span style={{ fontSize: 14, fontWeight: 600, color: "#2c2416" }}>{it.name}</span>
+                    {it.hint && <span style={{ fontSize: 12, color: "#9a8a6a" }}>— {it.hint}</span>}
+                  </>
+                )}
               </div>
             ))}
         </div>
@@ -2597,6 +2666,7 @@ function BitacoraSection({ bitacora, addBitacoraLogEntry, updateBitacoraEntry, g
   const [date, setDate] = useState(todayStr());
   const [mentions, setMentions] = useState([]);
   const [logPhoto, setLogPhoto] = useState(null);
+  const [createTasks, setCreateTasks] = useState(true);
   const [filterCat, setFilterCat] = useState("todas");
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState(null);
@@ -2613,11 +2683,11 @@ function BitacoraSection({ bitacora, addBitacoraLogEntry, updateBitacoraEntry, g
   const candidates = buildMentionCandidates(plantsOfGarden(plants, gardens, garden), garden);
   const activeMentions = (txt, list) => list.filter(m => txt.includes("@" + m.label));
 
-  const resetForm = () => { setText(""); setDate(todayStr()); setMentions([]); setLogPhoto(null); };
+  const resetForm = () => { setText(""); setDate(todayStr()); setMentions([]); setLogPhoto(null); setCreateTasks(true); };
 
   const handleAdd = async () => {
     if (!text.trim()) return;
-    const ok = await addBitacoraLogEntry({ text, date, photoFile: logPhoto, mentions });
+    const ok = await addBitacoraLogEntry({ text, date, photoFile: logPhoto, mentions, createTasks });
     if (ok) { resetForm(); setShowAdd(false); }
   };
 
@@ -2636,6 +2706,10 @@ function BitacoraSection({ bitacora, addBitacoraLogEntry, updateBitacoraEntry, g
   const sorted = bitacora.slice().sort((a, b) => b.date.localeCompare(a.date));
   const filtered = filterCat === "todas" ? sorted : sorted.filter(b => b.category === filterCat);
   const linked = activeMentions(text, mentions);
+  const newPlants = linked.filter(m => m.type === "np");
+  const newBeds = linked.filter(m => m.type === "nb");
+  const previewMentions = linked.map((m, i) => m.type === "np" ? { type: "p", id: "new" + i, label: m.label } : m.type === "nb" ? { type: "b", id: "new" + i, label: m.label } : m);
+  const inferred = createTasks ? inferTasks(encodeMentions(text, previewMentions).stored) : [];
 
   return (
     <div>
@@ -2652,13 +2726,37 @@ function BitacoraSection({ bitacora, addBitacoraLogEntry, updateBitacoraEntry, g
             value={text} onChange={setText}
             mentions={mentions} onMentionsChange={setMentions}
             candidates={candidates}
+            allowCreate
             placeholder="Contá qué hiciste hoy en el jardín… Escribí @ para mencionar una planta o un cantero."
           />
-          <div style={{ fontSize: 12, color: "#9a8a6a", margin: "6px 0 12px", minHeight: 18 }}>
+          <div style={{ fontSize: 12, color: "#9a8a6a", margin: "6px 0 12px", minHeight: 18, lineHeight: 1.9 }}>
             {linked.length === 0
-              ? "Tip: escribí @ y elegí del menú para vincular la anotación a plantas y canteros."
-              : <>Vinculada a: {linked.map(m => <span key={m.type + m.id} className="tag" style={{ marginRight: 4 }}>{m.type === "p" ? "🌿" : "📐"} {m.label}</span>)}</>}
+              ? "Tip: escribí @ y elegí del menú para vincular la anotación a plantas y canteros. Si no existe, el menú te deja crearlo."
+              : <>Vinculada a: {linked.map(m => (
+                <span key={m.type + m.id} className="tag" style={{ marginRight: 4, ...(m.type === "np" || m.type === "nb" ? { background: "#fff3d6", borderColor: "#e8c870", color: "#8a6a10" } : {}) }}>
+                  {m.type === "p" ? "🌿" : m.type === "b" ? "📐" : m.type === "np" ? "🌱" : "📐"} {m.label}{m.type === "np" ? " · planta nueva" : m.type === "nb" ? " · cantero nuevo" : ""}
+                </span>))}</>}
           </div>
+
+          {(inferred.length > 0 || newPlants.length > 0 || newBeds.length > 0) && (
+            <div style={{ background: "#f7faef", border: "1px solid #dde8c4", borderRadius: 10, padding: "10px 12px", marginBottom: 12, fontSize: 13, color: "#3a5a20" }}>
+              {(newPlants.length > 0 || newBeds.length > 0) && (
+                <div style={{ marginBottom: inferred.length ? 6 : 0 }}>
+                  ✨ Se {newPlants.length + newBeds.length === 1 ? "va a crear" : "van a crear"}: {[...newPlants.map(m => `planta "${m.label}" (en tierra)`), ...newBeds.map(m => `cantero "${m.label}" en ${garden?.name}`)].join(" · ")}. Después completás la ficha aparte.
+                </div>
+              )}
+              {inferred.length > 0 && (
+                <div>
+                  ✅ Tareas detectadas ({inferred.length}):{" "}
+                  {inferred.map(t => <span key={t.plantId + t.type} className="tag" style={{ marginRight: 4 }}>{BITACORA_TASK_TYPE_ICON[t.type] || "📝"} {t.type} → {t.plantLabel}</span>)}
+                </div>
+              )}
+            </div>
+          )}
+          <label style={{ display: "flex", alignItems: "center", gap: 8, textTransform: "none", letterSpacing: 0, fontSize: 13, color: "#6a5a3a", marginBottom: 12, cursor: "pointer" }}>
+            <input type="checkbox" checked={createTasks} onChange={e => setCreateTasks(e.target.checked)} style={{ width: "auto" }} />
+            Crear tareas automáticamente a partir del texto (regué, podé, sembré…)
+          </label>
 
           <div className="grid-3" style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 12, marginBottom: 14, alignItems: "start" }}>
             <div><label>Fecha</label><input type="date" value={date} onChange={e => setDate(e.target.value)} /></div>
