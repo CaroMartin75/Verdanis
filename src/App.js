@@ -125,6 +125,96 @@ async function removePhotoFile(url) {
   await supabase.storage.from(PHOTO_BUCKET).remove([decodeURIComponent(url.slice(i + marker.length))]);
 }
 
+// ── @menciones ───────────────────────────────────────────────
+// En el texto guardado una mención se escribe @[Etiqueta](p:ID) (planta) o @[Etiqueta](b:ID) (cantero).
+// En el editor se ve como "@Etiqueta".
+const MENTION_SRC = "@\\[([^\\]]+)\\]\\((p|b):([^)]+)\\)";
+
+function decodeMentions(stored) {
+  const mentions = [];
+  const text = (stored || "").replace(new RegExp(MENTION_SRC, "g"), (m, label, type, id) => {
+    if (!mentions.some(x => x.id === id && x.type === type)) mentions.push({ type, id, label });
+    return "@" + label;
+  });
+  return { text, mentions };
+}
+
+// Convierte "@Etiqueta" en token solo para las menciones que siguen presentes en el texto.
+function encodeMentions(text, mentions) {
+  let out = text;
+  const used = [];
+  [...mentions].sort((a, b) => b.label.length - a.label.length).forEach(m => {
+    const needle = "@" + m.label;
+    if (out.includes(needle)) {
+      out = out.split(needle).join(`@[${m.label}](${m.type}:${m.id})`);
+      used.push(m);
+    }
+  });
+  return { stored: out, used };
+}
+
+// Muestra el texto de una entrada con las menciones resaltadas (y clickeables si se pasa onPlant).
+function renderRichText(stored, { plants = [], onPlant } = {}) {
+  const parts = [];
+  const re = new RegExp(MENTION_SRC, "g");
+  let last = 0, m, k = 0;
+  const src = stored || "";
+  while ((m = re.exec(src)) !== null) {
+    if (m.index > last) parts.push(src.slice(last, m.index));
+    const [, label, type, id] = m;
+    if (type === "p") {
+      const exists = plants.some(pl => pl.id === id);
+      parts.push(
+        <span key={k++} className={exists && onPlant ? "plant-link" : undefined} onClick={exists && onPlant ? () => onPlant(id) : undefined}
+          style={{ fontWeight: 600, color: "#4a7a2a", background: "#eef4e0", borderRadius: 6, padding: "0 4px" }}>@{label}</span>
+      );
+    } else {
+      parts.push(<span key={k++} style={{ fontWeight: 600, color: "#7a5a2a", background: "#f6ecd8", borderRadius: 6, padding: "0 4px" }}>📐 {label}</span>);
+    }
+    last = m.index + m[0].length;
+  }
+  if (last < src.length) parts.push(src.slice(last));
+  return parts;
+}
+
+// Plantas del jardín activo: las de sus canteros + las que no están en ningún cantero.
+function plantsOfGarden(plants, gardens, garden) {
+  const placedAnywhere = new Set(gardens.flatMap(g => (g.beds || []).flatMap(b => b.plantIds || [])));
+  const placedHere = new Set((garden?.beds || []).flatMap(b => b.plantIds || []));
+  return plants.filter(p => placedHere.has(p.id) || !placedAnywhere.has(p.id));
+}
+
+// Opciones del menú de @: plantas y canteros del jardín activo, con etiquetas que no se repiten.
+function buildMentionCandidates(plantsHere, garden) {
+  const beds = garden?.beds || [];
+  const bedsOf = (pid) => beds.filter(b => (b.plantIds || []).includes(pid)).map(b => b.name);
+  const nameCount = {};
+  plantsHere.forEach(p => { const k = normalizeText(p.name); nameCount[k] = (nameCount[k] || 0) + 1; });
+  const clean = (t) => (t || "").replace(/[\]\n]/g, " ").trim();
+  const items = [];
+  const seen = new Set();
+  const uniqueLabel = (base, fallbackSuffix) => {
+    let label = base;
+    if (seen.has(normalizeText(label))) label = `${base} (${fallbackSuffix})`;
+    let n = 2;
+    while (seen.has(normalizeText(label))) label = `${base} (${fallbackSuffix} ${n++})`;
+    seen.add(normalizeText(label));
+    return label;
+  };
+  plantsHere.forEach(p => {
+    const where = bedsOf(p.id).join(", ");
+    const hint = where || (p.status && p.status !== "en tierra" ? p.status : "");
+    const dup = nameCount[normalizeText(p.name)] > 1;
+    const distinct = where || p.status || clean((p.myObservations || p.description || "").slice(0, 24)) || p.id.slice(-4);
+    const base = clean(dup ? `${p.name} — ${distinct}` : p.name);
+    items.push({ type: "p", id: p.id, name: p.name, label: uniqueLabel(base, "planta"), hint, icon: p.emoji || "🌿" });
+  });
+  beds.forEach(b => {
+    items.push({ type: "b", id: b.id, name: b.name, label: uniqueLabel(clean(b.name), "cantero"), hint: "cantero", icon: "📐" });
+  });
+  return items;
+}
+
 function weekOfYear(d) {
   const start = new Date(d.getFullYear(), 0, 1);
   return Math.floor((d - start) / (7 * 24 * 3600 * 1000));
@@ -352,10 +442,14 @@ export default function JardinApp() {
   // - crea los canteros nuevos en el jardín elegido
   // - crea una tarea por cada combinación planta × tipo de tarea
   // Devuelve true si todo se guardó.
-  const addBitacoraLogEntry = async ({ text, gardenId, date, plantIds, newPlantNames, bedIds, newBedNames, taskTypes, photoFile }) => {
+  const addBitacoraLogEntry = async ({ text: rawText, date, photoFile, mentions = [], newPlantNames = [], newBedNames = [], taskTypes = [] }) => {
     setSaving(true);
     try {
       const stamp = Date.now();
+      const gardenId = activeGarden;
+      const { stored: text, used } = encodeMentions(rawText, mentions);
+      const plantIds = used.filter(m => m.type === "p").map(m => m.id);
+      const bedIds = used.filter(m => m.type === "b").map(m => m.id);
       const photoUrl = photoFile ? await uploadPhoto(photoFile, "bitacora") : "";
 
       // Plantas nuevas: si el nombre coincide con una ficha existente (p. ej. de la enciclopedia) se reutiliza.
@@ -433,8 +527,8 @@ export default function JardinApp() {
         resolvedPlantIds.forEach(plantId => {
           taskTypes.forEach(type => {
             i += 1;
-            newTasks.push({ id: "t" + stamp + "_" + i, plant_id: plantId, garden_id: gardenId || "", bed_id: bedForPlant(plantId), type, date, note: text, learned_pattern: true });
-            if (text) newRecords.push({ id: "r" + stamp + "_" + i, plant_id: plantId, garden_id: gardenId || "", date, text: "[" + type.toUpperCase() + "] " + text, evolution: "neutral" });
+            newTasks.push({ id: "t" + stamp + "_" + i, plant_id: plantId, garden_id: gardenId || "", bed_id: bedForPlant(plantId), type, date, note: rawText, learned_pattern: true });
+            if (rawText) newRecords.push({ id: "r" + stamp + "_" + i, plant_id: plantId, garden_id: gardenId || "", date, text: "[" + type.toUpperCase() + "] " + rawText, evolution: "neutral" });
           });
         });
         dbError(await supabase.from("tasks").insert(newTasks), "No se pudieron crear las tareas");
@@ -452,16 +546,19 @@ export default function JardinApp() {
   };
 
   // Editar una entrada existente: texto, fecha, categoría y plantas involucradas.
-  const updateBitacoraEntry = async (id, { text, date, category, plantIds, photoUrl, newPhotoFile, removePhoto }) => {
+  const updateBitacoraEntry = async (id, { text, date, category, plantIds, bedIds = [], mentions = [], photoUrl, newPhotoFile, removePhoto }) => {
     setSaving(true);
     try {
+      const { stored, used } = encodeMentions(text, mentions);
+      const allPlantIds = [...new Set([...plantIds, ...used.filter(m => m.type === "p").map(m => m.id)])];
+      const allBedIds = [...new Set([...bedIds, ...used.filter(m => m.type === "b").map(m => m.id)])];
       let nextPhoto = photoUrl;
       const photoChanged = !!newPhotoFile || removePhoto;
       if (newPhotoFile) nextPhoto = await uploadPhoto(newPhotoFile, "bitacora");
       else if (removePhoto) nextPhoto = "";
-      dbError(await supabase.from("bitacora").update({ text, date, category, plant_ids: plantIds, plant_id: null, ...(photoChanged ? { photo_url: nextPhoto } : {}) }).eq("id", id), "No se pudo editar la entrada");
+      dbError(await supabase.from("bitacora").update({ text: stored, date, category, plant_ids: allPlantIds, bed_ids: allBedIds, plant_id: null, ...(photoChanged ? { photo_url: nextPhoto } : {}) }).eq("id", id), "No se pudo editar la entrada");
       if (photoChanged && photoUrl) removePhotoFile(photoUrl);
-      setBitacora(prev => prev.map(b => b.id === id ? { ...b, text, date, category, plantIds, photoUrl: nextPhoto } : b));
+      setBitacora(prev => prev.map(b => b.id === id ? { ...b, text: stored, date, category, plantIds: allPlantIds, bedIds: allBedIds, photoUrl: nextPhoto } : b));
       return true;
     } catch (e) {
       window.alert("No se pudo guardar la edición.\n\n" + e.message + "\n\nSi dice que falta una columna o que el bucket no existe, hay que correr el SQL pendiente en Supabase.");
@@ -707,9 +804,7 @@ function HomeSection({ garden, gardens, plants, encyclopediaPlants, tasks, activ
   };
 
   // Plantas del jardín activo: las de sus canteros + las que no están en ningún cantero.
-  const placedAnywhere = new Set(gardens.flatMap(g => (g.beds || []).flatMap(b => b.plantIds || [])));
-  const placedHere = new Set((garden?.beds || []).flatMap(b => b.plantIds || []));
-  const plantsHere = plants.filter(p => placedHere.has(p.id) || !placedAnywhere.has(p.id));
+  const plantsHere = plantsOfGarden(plants, gardens, garden);
 
   // Bloque A — esta semana en tu jardín (rota por semana).
   const blooming = plantsHere.filter(p => plantFloweringMonths(p).has(monthIdx)).sort((a, b) => a.id.localeCompare(b.id));
@@ -926,6 +1021,84 @@ function SinglePhotoPicker({ file, url, onPick, onClear }) {
         <input type="file" accept="image/*" style={{ display: "none" }} onChange={e => { if (e.target.files[0]) onPick(e.target.files[0]); e.target.value = ""; }} />
       </label>
       {shown && <button type="button" className="btn-secondary" style={{ fontSize: 13, color: "#c04020", borderColor: "#e0c8b8" }} onClick={onClear}>Quitar</button>}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// MENTION TEXTAREA — texto libre con menú de @menciones
+// ─────────────────────────────────────────────────────────────
+function MentionTextarea({ value, onChange, mentions, onMentionsChange, candidates, placeholder, rows = 7 }) {
+  const ref = useRef(null);
+  const [menu, setMenu] = useState(null); // { start, query }
+  const [index, setIndex] = useState(0);
+
+  const detect = (text, caret) => {
+    const m = /(^|\s)@([^@\n]{0,30})$/.exec(text.slice(0, caret));
+    return m ? { start: caret - m[2].length - 1, query: m[2] } : null;
+  };
+  const words = menu ? normalizeText(menu.query).split(/\s+/).filter(Boolean) : [];
+  // Primero lo que se llama como lo escrito, después lo que solo coincide por su ubicación.
+  const rank = (c) => {
+    const byName = normalizeText(c.name);
+    if (words.length && byName.startsWith(words[0])) return 0;
+    if (words.every(w => byName.includes(w))) return 1;
+    return 2;
+  };
+  const items = menu ? candidates
+    .filter(c => { const hay = normalizeText(`${c.name} ${c.label} ${c.hint}`); return words.every(w => hay.includes(w)); })
+    .map((c, i) => ({ c, i, r: rank(c) }))
+    .sort((a, b) => a.r - b.r || a.i - b.i)
+    .map(x => x.c)
+    .slice(0, 8) : [];
+
+  const refresh = (text, caret) => {
+    const next = detect(text, caret);
+    setMenu(prev => (prev && next && prev.start === next.start && prev.query === next.query) ? prev : next);
+    if (!next || !menu || next.query !== menu.query) setIndex(0);
+  };
+
+  const choose = (item) => {
+    const caret = ref.current.selectionStart;
+    const before = value.slice(0, menu.start);
+    const insert = "@" + item.label + " ";
+    onChange(before + insert + value.slice(caret));
+    if (!mentions.some(m => m.id === item.id && m.type === item.type)) onMentionsChange([...mentions, { type: item.type, id: item.id, label: item.label }]);
+    setMenu(null);
+    setTimeout(() => { if (ref.current) { ref.current.focus(); const pos = (before + insert).length; ref.current.setSelectionRange(pos, pos); } }, 0);
+  };
+
+  const onKeyDown = (e) => {
+    if (!menu || items.length === 0) { if (menu && e.key === "Escape") setMenu(null); return; }
+    if (e.key === "ArrowDown") { e.preventDefault(); setIndex(i => (i + 1) % items.length); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setIndex(i => (i - 1 + items.length) % items.length); }
+    else if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); choose(items[Math.min(index, items.length - 1)]); }
+    else if (e.key === "Escape") { e.preventDefault(); setMenu(null); }
+  };
+
+  return (
+    <div style={{ position: "relative" }}>
+      <textarea ref={ref} rows={rows} value={value} placeholder={placeholder}
+        onChange={e => { onChange(e.target.value); refresh(e.target.value, e.target.selectionStart); }}
+        onSelect={e => refresh(e.target.value, e.target.selectionStart)}
+        onKeyDown={onKeyDown}
+        onBlur={() => setMenu(null)}
+        style={{ fontSize: 15, lineHeight: 1.6, resize: "vertical" }} />
+      {menu && (
+        <div style={{ position: "absolute", left: 0, right: 0, top: "100%", marginTop: 4, zIndex: 80, background: "#fff", border: "1px solid #e0d8c8", borderRadius: 10, boxShadow: "0 8px 24px rgba(0,0,0,0.14)", maxHeight: 280, overflowY: "auto" }}>
+          {items.length === 0
+            ? <div style={{ padding: "10px 14px", fontSize: 13, color: "#8a7a5a" }}>Sin coincidencias para "@{menu.query}"</div>
+            : items.map((it, i) => (
+              <div key={it.type + it.id} onMouseDown={e => { e.preventDefault(); choose(it); }} onMouseEnter={() => setIndex(i)}
+                style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 14px", cursor: "pointer", background: i === index ? "#eef4e0" : "#fff", borderBottom: "1px solid #f5f0e8" }}>
+                <span style={{ fontSize: 18 }}>{it.icon}</span>
+                <span style={{ fontSize: 14, fontWeight: 600, color: "#2c2416" }}>{it.name}</span>
+                {it.hint && <span style={{ fontSize: 12, color: "#9a8a6a" }}>— {it.hint}</span>}
+                {it.label !== it.name && it.label !== `${it.name} — ${it.hint}` && <span style={{ fontSize: 11, color: "#b8aa88", marginLeft: "auto" }}>@{it.label}</span>}
+              </div>
+            ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1491,7 +1664,7 @@ function PlantSheet({ plantId, getPlantContext, onBack, updatePlantNote, addTask
                   <div key={b.id} style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 10, paddingBottom: 10, borderBottom: "1px solid #f0e8d8" }}>
                     <span style={{ fontSize: 18 }}>{BITACORA_CATEGORY_ICON[b.category] || "📝"}</span>
                     <div>
-                      <div style={{ fontSize: 13, color: "#4a3a2a" }}>{b.text}</div>
+                      <div style={{ fontSize: 13, color: "#4a3a2a", whiteSpace: "pre-wrap" }}>{renderRichText(b.text, { plants })}</div>
                       <div style={{ fontSize: 11, color: "#aaa090", marginTop: 2 }}>{b.date} · {b.category}</div>
                     </div>
                   </div>
@@ -2398,7 +2571,7 @@ function CalendarSection({ tasks, plants, garden, setSelectedPlantId, bitacora =
                 <div key={b.id} style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 10, paddingBottom: 10, borderBottom: "1px solid #f0e8d8" }}>
                   <span style={{ fontSize: 18 }}>{BITACORA_CATEGORY_ICON[b.category] || "📝"}</span>
                   <div>
-                    <div style={{ fontSize: 13, color: "#4a3a2a" }}>{b.text}</div>
+                    <div style={{ fontSize: 13, color: "#4a3a2a", whiteSpace: "pre-wrap" }}>{renderRichText(b.text, { plants, onPlant: setSelectedPlantId })}</div>
                     <div style={{ fontSize: 11, color: "#aaa090", marginTop: 2 }}>
                       {b.date} · {g ? `🌿 ${g.name}` : "🌍 General"}
                       {linked.map(pl => <span key={pl.id}> · <span className="plant-link" onClick={() => setSelectedPlantId(pl.id)}>{pl.emoji} {pl.name}</span></span>)}
@@ -2418,10 +2591,15 @@ function CalendarSection({ tasks, plants, garden, setSelectedPlantId, bitacora =
 // BITÁCORA SECTION
 // ─────────────────────────────────────────────────────────────
 function BitacoraSection({ bitacora, addBitacoraLogEntry, updateBitacoraEntry, gardens, plants = [], setSelectedPlantId, activeGarden, autoOpenAdd, setAutoOpenAdd }) {
+  const todayStr = () => new Date().toISOString().slice(0, 10);
   const [showAdd, setShowAdd] = useState(false);
+  const [text, setText] = useState("");
+  const [date, setDate] = useState(todayStr());
+  const [mentions, setMentions] = useState([]);
+  const [logPhoto, setLogPhoto] = useState(null);
+  const [filterCat, setFilterCat] = useState("todas");
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState(null);
-  const [logPhoto, setLogPhoto] = useState(null);
   const [viewPhoto, setViewPhoto] = useState(null);
 
   useEffect(() => {
@@ -2431,9 +2609,22 @@ function BitacoraSection({ bitacora, addBitacoraLogEntry, updateBitacoraEntry, g
     }
   }, [autoOpenAdd, setAutoOpenAdd]);
 
+  const garden = gardens.find(g => g.id === activeGarden);
+  const candidates = buildMentionCandidates(plantsOfGarden(plants, gardens, garden), garden);
+  const activeMentions = (txt, list) => list.filter(m => txt.includes("@" + m.label));
+
+  const resetForm = () => { setText(""); setDate(todayStr()); setMentions([]); setLogPhoto(null); };
+
+  const handleAdd = async () => {
+    if (!text.trim()) return;
+    const ok = await addBitacoraLogEntry({ text, date, photoFile: logPhoto, mentions });
+    if (ok) { resetForm(); setShowAdd(false); }
+  };
+
   const startEdit = (b) => {
+    const { text: plain, mentions: ms } = decodeMentions(b.text);
     setEditingId(b.id);
-    setEditForm({ text: b.text, date: b.date, category: b.category, plantIds: b.plantIds, photoUrl: b.photoUrl, newPhotoFile: null, removePhoto: false });
+    setEditForm({ text: plain, mentions: ms, date: b.date, category: b.category, plantIds: b.plantIds, bedIds: b.bedIds || [], photoUrl: b.photoUrl, newPhotoFile: null, removePhoto: false });
   };
   const toggleEditPlant = (id) => setEditForm(f => ({ ...f, plantIds: f.plantIds.includes(id) ? f.plantIds.filter(x => x !== id) : [...f.plantIds, id] }));
   const saveEdit = async () => {
@@ -2441,31 +2632,10 @@ function BitacoraSection({ bitacora, addBitacoraLogEntry, updateBitacoraEntry, g
     const ok = await updateBitacoraEntry(editingId, editForm);
     if (ok) { setEditingId(null); setEditForm(null); }
   };
-  const emptyLog = { date: new Date().toISOString().slice(0, 10), gardenId: activeGarden || "", text: "", plantIds: [], newPlantNames: [], bedIds: [], newBedNames: [], taskTypes: [] };
-  const [log, setLog] = useState(emptyLog);
-  const [filterCat, setFilterCat] = useState("todas");
-
-  const togglePlant = (id) => setLog(l => ({ ...l, plantIds: l.plantIds.includes(id) ? l.plantIds.filter(x => x !== id) : [...l.plantIds, id] }));
-  const toggleBed = (id) => setLog(l => ({ ...l, bedIds: l.bedIds.includes(id) ? l.bedIds.filter(x => x !== id) : [...l.bedIds, id] }));
-  const toggleType = (t) => setLog(l => ({ ...l, taskTypes: l.taskTypes.includes(t) ? l.taskTypes.filter(x => x !== t) : [...l.taskTypes, t] }));
-  const changeGarden = (gardenId) => setLog(l => ({ ...l, gardenId, bedIds: [], newBedNames: [] }));
-  const logGarden = gardens.find(g => g.id === log.gardenId);
-  const gardenBeds = (logGarden?.beds || []).map(b => ({ id: b.id, label: b.name }));
-
-  const handleAdd = async () => {
-    if (!log.text.trim()) return;
-    const ok = await addBitacoraLogEntry({ ...log, photoFile: logPhoto });
-    if (ok) {
-      setLog({ ...emptyLog, gardenId: log.gardenId });
-      setLogPhoto(null);
-      setShowAdd(false);
-    }
-  };
 
   const sorted = bitacora.slice().sort((a, b) => b.date.localeCompare(a.date));
   const filtered = filterCat === "todas" ? sorted : sorted.filter(b => b.category === filterCat);
-  const totalPlants = log.plantIds.length + log.newPlantNames.length;
-  const taskCount = totalPlants * log.taskTypes.length;
+  const linked = activeMentions(text, mentions);
 
   return (
     <div>
@@ -2476,76 +2646,31 @@ function BitacoraSection({ bitacora, addBitacoraLogEntry, updateBitacoraEntry, g
 
       {showAdd && (
         <div className="card" style={{ marginBottom: 20, borderLeft: "4px solid #8ab860" }}>
-          <div className="section-title">Nueva anotación</div>
+          <div className="section-title">Nueva anotación — {garden?.name}</div>
 
-          <textarea rows={5} value={log.text} onChange={e => setLog(l => ({ ...l, text: e.target.value }))} placeholder="Contá qué hiciste hoy en el jardín..." style={{ marginBottom: 12, fontSize: 15 }} />
+          <MentionTextarea
+            value={text} onChange={setText}
+            mentions={mentions} onMentionsChange={setMentions}
+            candidates={candidates}
+            placeholder="Contá qué hiciste hoy en el jardín… Escribí @ para mencionar una planta o un cantero."
+          />
+          <div style={{ fontSize: 12, color: "#9a8a6a", margin: "6px 0 12px", minHeight: 18 }}>
+            {linked.length === 0
+              ? "Tip: escribí @ y elegí del menú para vincular la anotación a plantas y canteros."
+              : <>Vinculada a: {linked.map(m => <span key={m.type + m.id} className="tag" style={{ marginRight: 4 }}>{m.type === "p" ? "🌿" : "📐"} {m.label}</span>)}</>}
+          </div>
 
-          <div className="grid-3" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
-            <div><label>Fecha</label><input type="date" value={log.date} onChange={e => setLog(l => ({ ...l, date: e.target.value }))} /></div>
-            <div><label>Jardín</label>
-              <select value={log.gardenId} onChange={e => changeGarden(e.target.value)}>
-                <option value="">🌍 General / fuera del jardín</option>
-                {gardens.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
-              </select>
+          <div className="grid-3" style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 12, marginBottom: 14, alignItems: "start" }}>
+            <div><label>Fecha</label><input type="date" value={date} onChange={e => setDate(e.target.value)} /></div>
+            <div>
+              <label>📷 Foto (opcional)</label>
+              <SinglePhotoPicker file={logPhoto} url="" onPick={setLogPhoto} onClear={() => setLogPhoto(null)} />
             </div>
           </div>
-
-          <div style={{ marginBottom: 12 }}>
-            <label>🌿 Plantas involucradas (elegí varias o escribí una nueva)</label>
-            <MultiPick
-              options={plants.map(p => ({ id: p.id, label: `${p.emoji} ${p.name}`.trim(), name: p.name }))}
-              selected={log.plantIds}
-              onToggle={togglePlant}
-              newNames={log.newPlantNames}
-              onNewNamesChange={names => setLog(l => ({ ...l, newPlantNames: names }))}
-              placeholder="Nombre de una planta que todavía no tenés…"
-              emptyText="No tenés plantas en tu jardín todavía."
-            />
-          </div>
-
-          <div style={{ marginBottom: 12 }}>
-            <label>📐 Canteros (del jardín elegido, o escribí uno nuevo)</label>
-            <MultiPick
-              options={gardenBeds}
-              selected={log.bedIds}
-              onToggle={toggleBed}
-              newNames={log.newBedNames}
-              onNewNamesChange={names => setLog(l => ({ ...l, newBedNames: names }))}
-              placeholder="Nombre de un cantero nuevo…"
-              emptyText={log.gardenId ? "Este jardín todavía no tiene canteros." : ""}
-              disabledNew={!log.gardenId}
-              disabledNewText="Elegí un jardín para ver o crear canteros"
-            />
-          </div>
-
-          <div style={{ marginBottom: 12 }}>
-            <label>✅ Tipos de tarea (elegí uno o varios)</label>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-              {BITACORA_TASK_TYPES.map(t => (
-                <button key={t} type="button" onClick={() => toggleType(t)} className="btn-secondary"
-                  style={{ fontSize: 12, padding: "5px 12px", background: log.taskTypes.includes(t) ? "#4a7a2a" : undefined, color: log.taskTypes.includes(t) ? "#fff" : undefined, borderColor: log.taskTypes.includes(t) ? "#4a7a2a" : undefined }}>
-                  {BITACORA_TASK_TYPE_ICON[t]} {t}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div style={{ marginBottom: 12 }}>
-            <label>📷 Foto (una por registro, opcional)</label>
-            <SinglePhotoPicker file={logPhoto} url="" onPick={setLogPhoto} onClear={() => setLogPhoto(null)} />
-          </div>
-
-          {(taskCount > 0 || log.newPlantNames.length > 0 || (log.newBedNames.length > 0 && log.gardenId)) && (
-            <div style={{ fontSize: 13, color: "#4a7a2a", marginBottom: 12, lineHeight: 1.6 }}>
-              {taskCount > 0 && <div>✅ Se van a crear {taskCount} tarea{taskCount === 1 ? "" : "s"} ({totalPlants} planta{totalPlants === 1 ? "" : "s"} × {log.taskTypes.length} tipo{log.taskTypes.length === 1 ? "" : "s"}).</div>}
-              {log.newPlantNames.length > 0 && <div>🌱 Se {log.newPlantNames.length === 1 ? "va a crear 1 planta nueva" : `van a crear ${log.newPlantNames.length} plantas nuevas`} en estado "en tierra"{log.bedIds.length + log.newBedNames.length > 0 ? ", ubicada" + (log.newPlantNames.length === 1 ? "" : "s") + " en los canteros elegidos" : ""}.</div>}
-              {log.newBedNames.length > 0 && log.gardenId && <div>📐 Se {log.newBedNames.length === 1 ? "va a crear 1 cantero nuevo" : `van a crear ${log.newBedNames.length} canteros nuevos`} en {logGarden?.name}.</div>}
-            </div>
-          )}
 
           <div style={{ display: "flex", gap: 10 }}>
-            <button className="btn-primary" onClick={handleAdd}>Guardar registro</button>
-            <button className="btn-secondary" onClick={() => { setShowAdd(false); setLog(emptyLog); setLogPhoto(null); }}>Cancelar</button>
+            <button className="btn-primary" onClick={handleAdd}>Guardar</button>
+            <button className="btn-secondary" onClick={() => { setShowAdd(false); resetForm(); }}>Cancelar</button>
           </div>
         </div>
       )}
@@ -2569,7 +2694,13 @@ function BitacoraSection({ bitacora, addBitacoraLogEntry, updateBitacoraEntry, g
             return (
               <div key={b.id} className="card" style={{ borderLeft: "4px solid #8ab860" }}>
                 <div className="section-title">Editar anotación</div>
-                <textarea rows={4} value={editForm.text} onChange={e => setEditForm(f => ({ ...f, text: e.target.value }))} style={{ marginBottom: 12, fontSize: 15 }} />
+                <div style={{ marginBottom: 12 }}>
+                  <MentionTextarea
+                    value={editForm.text} onChange={t => setEditForm(f => ({ ...f, text: t }))}
+                    mentions={editForm.mentions} onMentionsChange={ms => setEditForm(f => ({ ...f, mentions: ms }))}
+                    candidates={candidates} rows={5}
+                  />
+                </div>
                 <div className="grid-3" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
                   <div><label>Fecha</label><input type="date" value={editForm.date} onChange={e => setEditForm(f => ({ ...f, date: e.target.value }))} /></div>
                   <div><label>Categoría</label>
@@ -2579,7 +2710,7 @@ function BitacoraSection({ bitacora, addBitacoraLogEntry, updateBitacoraEntry, g
                   </div>
                 </div>
                 <div style={{ marginBottom: 12 }}>
-                  <label>🌿 Plantas involucradas</label>
+                  <label>🌿 Plantas vinculadas</label>
                   <MultiPick
                     options={plants.map(p => ({ id: p.id, label: `${p.emoji} ${p.name}`.trim(), name: p.name }))}
                     selected={editForm.plantIds}
@@ -2618,7 +2749,7 @@ function BitacoraSection({ bitacora, addBitacoraLogEntry, updateBitacoraEntry, g
                     {bedNames.length > 0 && <span style={{ fontSize: 12, color: "#8a7a5a" }}>📐 {bedNames.join(", ")}</span>}
                     {linkedPlants.map(pl => <span key={pl.id} className="plant-link" onClick={() => setSelectedPlantId(pl.id)} style={{ fontSize: 12 }}>{pl.emoji} {pl.name}</span>)}
                   </div>
-                  <p style={{ margin: "6px 0 0", fontSize: 14, color: "#4a3a2a", lineHeight: 1.6 }}>{b.text}</p>
+                  <p style={{ margin: "6px 0 0", fontSize: 14, color: "#4a3a2a", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{renderRichText(b.text, { plants, onPlant: setSelectedPlantId })}</p>
                   {b.photoUrl && <img src={b.photoUrl} alt="" loading="lazy" onClick={() => setViewPhoto(b.photoUrl)} style={{ marginTop: 10, maxWidth: "100%", maxHeight: 260, borderRadius: 10, cursor: "pointer", border: "1px solid #e8e0cc", objectFit: "cover" }} />}
                   {(b.taskTypes || []).length > 0 && (
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 8 }}>
