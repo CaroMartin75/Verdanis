@@ -94,18 +94,58 @@ const PHOTO_BUCKET = "plant-photos";
 
 // Reduce fotos grandes (celular) antes de subirlas; si algo falla sube el original.
 async function resizeImage(file, maxSide = 1600, quality = 0.85) {
+  const draw = async (src, w, h) => {
+    const scale = Math.min(1, maxSide / Math.max(w, h));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(w * scale);
+    canvas.height = Math.round(h * scale);
+    canvas.getContext("2d").drawImage(src, 0, 0, canvas.width, canvas.height);
+    return new Promise(res => canvas.toBlob(res, "image/jpeg", quality));
+  };
   try {
     const bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
-    const scale = Math.min(1, maxSide / Math.max(bmp.width, bmp.height));
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.round(bmp.width * scale);
-    canvas.height = Math.round(bmp.height * scale);
-    canvas.getContext("2d").drawImage(bmp, 0, 0, canvas.width, canvas.height);
-    const blob = await new Promise(res => canvas.toBlob(res, "image/jpeg", quality));
-    return blob || file;
+    return (await draw(bmp, bmp.width, bmp.height)) || file;
   } catch (e) {
-    return file;
+    // Formatos que createImageBitmap no lee: se prueba con un <img> (el navegador sabe decodificarlos).
+    try {
+      const url = URL.createObjectURL(file);
+      const img = await new Promise((ok, fail) => { const i = new Image(); i.onload = () => ok(i); i.onerror = fail; i.src = url; });
+      const blob = await draw(img, img.naturalWidth, img.naturalHeight);
+      URL.revokeObjectURL(url);
+      return blob || file;
+    } catch (e2) {
+      return file;
+    }
   }
+}
+
+// Atajo de pegado según el sistema, para mostrar en los textos de ayuda.
+const PASTE_KEY = typeof navigator !== "undefined" && /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent || "") ? "⌘V" : "Ctrl+V";
+
+// Escucha el pegado de imágenes (Cmd+V / Ctrl+V) mientras `enabled` sea true.
+// Si el portapapeles trae texto y el foco está en un campo de texto, se deja pegar el texto normal.
+function usePasteImages(onImages, enabled = true) {
+  const cb = useRef(onImages);
+  cb.current = onImages;
+  useEffect(() => {
+    if (!enabled) return undefined;
+    const handler = (e) => {
+      const cd = e.clipboardData;
+      if (!cd) return;
+      let files = Array.from(cd.files || []).filter(f => f.type.startsWith("image/"));
+      if (!files.length) {
+        files = Array.from(cd.items || []).filter(it => it.kind === "file" && it.type.startsWith("image/")).map(it => it.getAsFile()).filter(Boolean);
+      }
+      if (!files.length) return;
+      const t = e.target;
+      const editable = t && (t.tagName === "TEXTAREA" || (t.tagName === "INPUT" && !["file", "checkbox", "radio", "button"].includes(t.type)) || t.isContentEditable);
+      if (editable && (cd.getData("text/plain") || "").trim()) return;
+      e.preventDefault();
+      cb.current(files);
+    };
+    document.addEventListener("paste", handler);
+    return () => document.removeEventListener("paste", handler);
+  }, [enabled]);
 }
 
 // Sube una foto al bucket y devuelve su URL pública.
@@ -1065,6 +1105,7 @@ function SinglePhotoPicker({ file, url, onPick, onClear }) {
         <input type="file" accept="image/*" style={{ display: "none" }} onChange={e => { if (e.target.files[0]) onPick(e.target.files[0]); e.target.value = ""; }} />
       </label>
       {shown && <button type="button" className="btn-secondary" style={{ fontSize: 13, color: "#c04020", borderColor: "#e0c8b8" }} onClick={onClear}>Quitar</button>}
+      <span style={{ fontSize: 12, color: "#9a8a6a" }}>o pegá una imagen con {PASTE_KEY}</span>
     </div>
   );
 }
@@ -1266,6 +1307,8 @@ function PlantSheet({ plantId, getPlantContext, onBack, updatePlantNote, addTask
   const [editData, setEditData] = useState({});
   const [aiSoon, setAiSoon] = useState(false);
   const [viewPhoto, setViewPhoto] = useState(null);
+  const pasteRef = useRef(null);
+  usePasteImages(files => pasteRef.current && pasteRef.current(files), true);
   const showAiSoon = () => { setAiSoon(true); setTimeout(() => setAiSoon(false), 5000); };
 
   const ctx = getPlantContext(plantId);
@@ -1410,6 +1453,8 @@ function PlantSheet({ plantId, getPlantContext, onBack, updatePlantNote, addTask
     } finally { setSaving(false); }
   };
 
+  pasteRef.current = handleAddPhotos;
+
   const handleDeletePhoto = async (url) => {
     if (!window.confirm("¿Borrar esta foto?")) return;
     setSaving(true);
@@ -1483,7 +1528,7 @@ function PlantSheet({ plantId, getPlantContext, onBack, updatePlantNote, addTask
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: (plant.photos || []).length ? 12 : 0 }}>
           <div className="section-title" style={{ margin: 0 }}>📷 Fotos ({(plant.photos || []).length})</div>
           <label className="btn-secondary" style={{ display: "inline-block", cursor: "pointer", fontSize: 13, textTransform: "none", letterSpacing: 0, margin: 0 }}>
-            ＋ Agregar fotos
+            ＋ Agregar fotos <span style={{ fontWeight: 400, color: "#9a8a6a", marginLeft: 4 }}>(o pegalas con {PASTE_KEY})</span>
             <input type="file" accept="image/*" multiple style={{ display: "none" }} onChange={e => { handleAddPhotos(e.target.files); e.target.value = ""; }} />
           </label>
         </div>
@@ -2678,6 +2723,12 @@ function BitacoraSection({ bitacora, addBitacoraLogEntry, updateBitacoraEntry, g
       setAutoOpenAdd(false);
     }
   }, [autoOpenAdd, setAutoOpenAdd]);
+
+  // Pegar una imagen: va a la edición si hay una abierta; si no, a la entrada nueva.
+  usePasteImages(files => {
+    if (editingId) setEditForm(f => (f ? { ...f, newPhotoFile: files[0], removePhoto: false } : f));
+    else setLogPhoto(files[0]);
+  }, showAdd || !!editingId);
 
   const garden = gardens.find(g => g.id === activeGarden);
   const candidates = buildMentionCandidates(plantsOfGarden(plants, gardens, garden), garden);
